@@ -9,28 +9,28 @@ export const renderHome = (root, { state }) => {
     root.innerHTML = `
         <section class="hero">
             <div class="hero-copy">
-                <p class="eyebrow">Docker-first experience</p>
-                <h1>Live odds, clean UX.</h1>
+                <p class="eyebrow">Efrei Betting Platform</p>
+                <h1>Bet on campus life.</h1>
                 <p class="lead">
-                    A lightweight, realtime-ready betting shell with a gateway, API, and cache-backed odds feed.
+                    Place bets on what happens at Efrei with points. Win rewards like homework help, AI credits, and exclusive perks. No real money, just pure fun.
                 </p>
                 <div class="hero-actions">
-                    <a class="btn primary" href="/signup" data-link>Get started</a>
+                    <a class="btn primary" href="/signup" data-link>Start betting</a>
                     <a class="btn ghost" href="/login" data-link>Sign in</a>
                 </div>
             </div>
             <div class="hero-card">
                 <div class="stat">
-                    <span class="stat-value">Realtime odds</span>
-                    <span class="stat-label">WebSocket stream + Redis pub/sub</span>
+                    <span class="stat-value">Points System</span>
+                    <span class="stat-label">Bet safely with virtual points, not real money</span>
                 </div>
                 <div class="stat">
-                    <span class="stat-value">Compose-only</span>
-                    <span class="stat-label">Every service runs in Docker</span>
+                    <span class="stat-value">Real Rewards</span>
+                    <span class="stat-label">Exchange points for homework help & AI queries</span>
                 </div>
                 <div class="stat">
-                    <span class="stat-value">Offline-ready</span>
-                    <span class="stat-label">Service worker caching</span>
+                    <span class="stat-value">Live Updates</span>
+                    <span class="stat-label">Real-time odds on campus events</span>
                 </div>
             </div>
         </section>
@@ -39,8 +39,8 @@ export const renderHome = (root, { state }) => {
             <div class="markets">
                 <div class="markets-header">
                     <div>
-                        <p class="eyebrow">Live markets</p>
-                        <h2>Featured matches</h2>
+                        <p class="eyebrow">Live Markets</p>
+                        <h2>Campus Events</h2>
                     </div>
                     <span class="status-pill" data-odds-status>Offline</span>
                 </div>

@@ -3,33 +3,33 @@ export const renderLogin = (root, { api, state, updateStatus, navigate }) => {
         <section class="auth">
             <div class="auth-card">
                 <p class="eyebrow">Welcome back</p>
-                <h1>Sign in</h1>
-                <p class="lead">Access your containerized workspace in seconds.</p>
+                <h1>Sign in to Efrei.bet</h1>
+                <p class="lead">Your points and bets are waiting. Let's see what's happening on campus today.</p>
 
                 <form id="login-form" class="form">
                     <label class="field">
                         <span>Email</span>
-                        <input type="email" name="email" autocomplete="email" required>
+                        <input type="email" name="email" autocomplete="email" placeholder="your.name@efrei.fr" required>
                     </label>
                     <label class="field">
                         <span>Password</span>
-                        <input type="password" name="password" autocomplete="current-password" minlength="6" required>
+                        <input type="password" name="password" autocomplete="current-password" minlength="6" placeholder="Enter your password" required>
                     </label>
                     <button class="btn primary" type="submit">Sign in</button>
                     <div class="form-status" role="status" aria-live="polite"></div>
                 </form>
 
-                <p class="form-note">No account yet? <a href="/signup" data-link>Create one</a>.</p>
+                <p class="form-note">No account yet? <a href="/signup" data-link>Join the fun</a></p>
             </div>
 
             <aside class="auth-aside">
                 <div class="aside-card">
-                    <h2>Compose-only workflow</h2>
-                    <p>Keep everything reproducible with Docker Compose at the core.</p>
+                    <h2>Virtual Points</h2>
+                    <p>Bet safely with points. No real money involved, just campus competition.</p>
                 </div>
                 <div class="aside-card">
-                    <h2>Secure gateway</h2>
-                    <p>JWT-based login with a gateway entry point to scale fast.</p>
+                    <h2>Earn Rewards</h2>
+                    <p>Win points and exchange them for homework help, AI queries, and more.</p>
                 </div>
             </aside>
         </section>

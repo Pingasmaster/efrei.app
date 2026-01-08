@@ -2,38 +2,38 @@ export const renderSignup = (root, { api, updateStatus, navigate }) => {
     root.innerHTML = `
         <section class="auth">
             <div class="auth-card">
-                <p class="eyebrow">New here?</p>
-                <h1>Create your account</h1>
-                <p class="lead">Get a clean Docker-first stack in minutes.</p>
+                <p class="eyebrow">Join Efrei.bet</p>
+                <h1>Start your betting journey</h1>
+                <p class="lead">Get free points to start, bet on campus events, and win amazing rewards.</p>
 
                 <form id="signup-form" class="form">
                     <label class="field">
                         <span>Name</span>
-                        <input type="text" name="name" autocomplete="name" required>
+                        <input type="text" name="name" autocomplete="name" placeholder="Your full name" required>
                     </label>
                     <label class="field">
                         <span>Email</span>
-                        <input type="email" name="email" autocomplete="email" required>
+                        <input type="email" name="email" autocomplete="email" placeholder="your.name@efrei.fr" required>
                     </label>
                     <label class="field">
                         <span>Password</span>
-                        <input type="password" name="password" autocomplete="new-password" minlength="6" required>
+                        <input type="password" name="password" autocomplete="new-password" minlength="6" placeholder="Create a secure password" required>
                     </label>
                     <button class="btn primary" type="submit">Create account</button>
                     <div class="form-status" role="status" aria-live="polite"></div>
                 </form>
 
-                <p class="form-note">Already have an account? <a href="/login" data-link>Sign in</a>.</p>
+                <p class="form-note">Already have an account? <a href="/login" data-link>Sign in here</a></p>
             </div>
 
             <aside class="auth-aside">
                 <div class="aside-card">
-                    <h2>Offline ready</h2>
-                    <p>Static assets are cached so the UI works without a network.</p>
+                    <h2>Free Starting Points</h2>
+                    <p>Every new member gets starter points to begin betting right away.</p>
                 </div>
                 <div class="aside-card">
-                    <h2>Extend quickly</h2>
-                    <p>Plug in your real logic and database calls when you are ready.</p>
+                    <h2>Campus Community</h2>
+                    <p>Join hundreds of Efrei students betting on what happens next on campus.</p>
                 </div>
             </aside>
         </section>
