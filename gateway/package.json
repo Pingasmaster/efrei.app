@@ -3,7 +3,9 @@
   "description": "Service gateway pour l'auth et le proxy vers /api et /ws.",
   "notes": [
     "Donne les JWTs avec un secet configurable.",
-    "Proxy pour les requêtes HTTP et requêtes HTTP et WebSocket vers l'api métier."
+    "Proxy pour les requêtes HTTP et requêtes HTTP et WebSocket vers l'api métier.",
+    "Se connecte à MySQL pour stocker les comptes utilisateurs.",
+    "Met en cache les utilisateurs dans Redis pour accélérer l'auth."
   ],
   "version": "0.1.0",
   "private": true,
@@ -12,9 +14,13 @@
     "start": "node index.js"
   },
   "dependencies": {
+    "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",
     "express": "^5.2.1",
+    "express-rate-limit": "^8.2.1",
     "http-proxy-middleware": "^3.0.5",
-    "jsonwebtoken": "^9.0.2"
+    "jsonwebtoken": "^9.0.3",
+    "mysql2": "^3.16.0",
+    "redis": "^5.10.0"
   }
 }
