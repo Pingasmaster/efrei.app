@@ -1,6 +1,7 @@
 version: "3.9"
 
 services:
+  # One-shot job that validates required .env values before boot.
   env-check:
     image: alpine:3.23.2
     command: ["/bin/sh", "/opt/validate-env.sh"]
@@ -11,6 +12,7 @@ services:
     networks:
       - internal
 
+  # Static frontend served by nginx (SPA with service worker).
   frontend:
     build:
       context: .
@@ -25,6 +27,7 @@ services:
     networks:
       - internal
 
+  # Gateway/API auth layer; proxies /api and /ws to the business API.
   gateway:
     build:
       context: .
@@ -54,6 +57,7 @@ services:
     networks:
       - internal
 
+  # Business API service (REST + WS) that consumes odds from Redis.
   api:
     build:
       context: .
@@ -78,6 +82,7 @@ services:
     networks:
       - internal
 
+  # MySQL database with a persistent named volume.
   mysql:
     image: mysql:9.5.0
     environment:
@@ -93,6 +98,7 @@ services:
     networks:
       - internal
 
+  # Redis used for caching and pub/sub of odds updates.
   redis:
     image: redis:8.4.0-alpine
     depends_on:
@@ -101,6 +107,7 @@ services:
     networks:
       - internal
 
+  # Background worker that publishes odds payloads to Redis on a schedule.
   odds-worker:
     build:
       context: .
@@ -119,8 +126,10 @@ services:
       - internal
 
 volumes:
+  # Persistent storage for MySQL data.
   mysql_data:
 
 networks:
+  # Private bridge network for service-to-service traffic.
   internal:
     driver: bridge

@@ -1,5 +1,10 @@
 {
   "name": "efrei-odds-worker",
+  "description": "Service d'arrière plan qui publie les côtes vers Redis.",
+  "notes": [
+    "Génère les payloads de côtes sur un intervalle fixe.",
+    "Publie les côtes vers la ODDS_CHANNEL configurée dans l'environnement."
+  ],
   "version": "0.1.0",
   "private": true,
   "type": "commonjs",

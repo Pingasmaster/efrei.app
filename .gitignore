@@ -1,3 +1,6 @@
+# Local environment secrets.
 .env
+# Node.js dependencies.
 node_modules/
+# macOS Finder metadata.
 .DS_Store

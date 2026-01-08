@@ -1,11 +1,15 @@
 FROM node:25.2.1-alpine
+# Lightweight Node.js image for the API service.
 
 WORKDIR /app
+# All subsequent paths are relative to /app.
 
 COPY api/package.json ./
+# Install production dependencies only.
 RUN npm install --omit=dev
 
 COPY api/index.js ./
 
 EXPOSE 4000
+# Run the API entrypoint.
 CMD ["npm", "start"]

@@ -2,7 +2,7 @@ export const renderSignup = (root, { api, updateStatus, navigate }) => {
     root.innerHTML = `
         <div class="signup-container">
             <div class="signup-header">
-                <p class="auth-eyebrow">Join Efrei.bet</p>
+                <p class="auth-eyebrow">Join Efrei.app</p>
                 <h1>START YOUR<br>BETTING JOURNEY</h1>
                 <p class="lead">Get free points to start, bet on campus events, and win amazing rewards.</p>
             </div>

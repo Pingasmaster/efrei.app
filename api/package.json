@@ -1,5 +1,10 @@
 {
   "name": "efrei-api",
+  "description": "La logique métier du service (REST + WS) qui sert les côtes et écoute sur Redis.",
+  "notes": [
+    "Dépendance de runtime, dépendance de dev pas incluses dans la build du conteneur.",
+    "Le point d'entrée est index.js via npm start."
+  ],
   "version": "0.1.0",
   "private": true,
   "type": "commonjs",

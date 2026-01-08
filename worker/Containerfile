@@ -1,10 +1,14 @@
 FROM node:25.2.1-alpine
+# Lightweight Node.js image for the background worker.
 
 WORKDIR /app
+# All subsequent paths are relative to /app.
 
 COPY worker/package.json ./
+# Install production dependencies only.
 RUN npm install --omit=dev
 
 COPY worker/index.js ./
 
+# Worker does not expose HTTP ports; it runs a background process.
 CMD ["npm", "start"]

@@ -1,10 +1,13 @@
+// Worker service: generates sample odds and publishes them to Redis.
 const { createClient } = require("redis");
 
+// Runtime configuration for Redis connection and publish cadence.
 const redisHost = process.env.REDIS_HOST || "redis";
 const redisPort = process.env.REDIS_PORT || "6379";
 const oddsChannel = process.env.ODDS_CHANNEL || "odds_updates";
 const intervalMs = Number(process.env.ODDS_INTERVAL_MS || 2500);
 
+// Static sample matches used to fabricate odds for the demo.
 const matches = [
   { id: "match-1", league: "Ligue 1", home: "Paris FC", away: "Lyon" },
   { id: "match-2", league: "Premier League", home: "Chelsea", away: "Arsenal" },
@@ -12,11 +15,13 @@ const matches = [
   { id: "match-4", league: "La Liga", home: "Valencia", away: "Sevilla" }
 ];
 
+// Utility to generate a random odd between min and max with 2 decimals.
 const randomOdd = (min, max) => {
   const value = Math.random() * (max - min) + min;
   return Number(value.toFixed(2));
 };
 
+// Build the payload with randomized starts and market prices.
 const buildOdds = () => {
   const now = Date.now();
   return matches.map((match) => {
@@ -35,11 +40,13 @@ const buildOdds = () => {
   });
 };
 
+// Connect to Redis, publish once, then publish on an interval.
 const start = async () => {
   const client = createClient({ url: `redis://${redisHost}:${redisPort}` });
   client.on("error", (err) => console.error("Redis error", err));
   await client.connect();
 
+  // Compose and publish the odds message to the channel.
   const publish = async () => {
     const payload = {
       type: "odds",
@@ -49,7 +56,9 @@ const start = async () => {
     await client.publish(oddsChannel, JSON.stringify(payload));
   };
 
+  // Publish immediately so the API has data right away.
   await publish();
+  // Continue publishing at the configured interval.
   setInterval(() => {
     publish().catch((error) => console.error("Publish error", error));
   }, intervalMs);
@@ -57,6 +66,7 @@ const start = async () => {
   console.log(`Odds worker publishing to ${oddsChannel} every ${intervalMs}ms`);
 };
 
+// Bootstrap the worker and exit on fatal failure.
 start().catch((error) => {
   console.error("Worker failed to start", error);
   process.exit(1);
