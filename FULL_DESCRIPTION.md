@@ -30,7 +30,7 @@ Services principaux (conteneurs Docker) :
   - WebSocket odds `/ws/odds` + endpoint `/odds`.
   - Expose `/health` et `/metrics` (Prometheus).
   - Émet des logs JSON structurés (Pino).
-  - Initialise le schéma MySQL (mode dev) via `ensureSchema`.
+  - Initialise le schéma MySQL (mode dev) via `ensureSchema` avec retries si MySQL n’est pas encore prêt (FK/DB manquants).
 - **mysql** : persistance des utilisateurs, paris, offres, tokens, audit logs, jobs de payout.
 - **redis** :
   - Pub/Sub odds (realtime) pour l’API.
@@ -40,6 +40,7 @@ Services principaux (conteneurs Docker) :
   - Publie des cotes aléatoires vers Redis (`ODDS_CHANNEL`) à intervalle fixe.
   - Consomme la queue `payout_jobs`, applique les payouts et les fees.
   - Retry/backoff avec `PAYOUT_DELAYED_SET` + dead-letter queue `PAYOUT_DEAD_LETTER_QUEUE`.
+  - Attend la disponibilité des tables MySQL avant de démarrer les traitements.
   - Expose `/metrics` sur `METRICS_PORT` (Prometheus) + logs JSON.
 
 Observability (optionnel, `docker-compose.observability.yml`) :

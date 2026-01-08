@@ -568,6 +568,37 @@ const initDatabase = async () => {
   }
 };
 
+const waitForSchema = async () => {
+  const requiredTables = [
+    "audit_logs",
+    "bet_options",
+    "bet_positions",
+    "bets",
+    "payout_jobs",
+    "users"
+  ];
+  const maxAttempts = 20;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const [rows] = await dbPool.query(
+      `SELECT TABLE_NAME
+       FROM information_schema.TABLES
+       WHERE TABLE_SCHEMA = ?
+         AND TABLE_NAME IN (${requiredTables.map(() => "?").join(",")})`,
+      [dbName, ...requiredTables]
+    );
+    const found = new Set(rows.map((row) => row.TABLE_NAME));
+    const missing = requiredTables.filter((table) => !found.has(table));
+    if (!missing.length) {
+      return;
+    }
+    if (attempt === maxAttempts) {
+      throw new Error(`Missing required tables: ${missing.join(", ")}`);
+    }
+    logger.warn({ attempt, maxAttempts, missing }, "Schema not ready, waiting");
+    await sleep(2000);
+  }
+};
+
 const startMetricsServer = () => {
   const server = http.createServer(async (req, res) => {
     if (req.url === "/metrics") {
@@ -586,6 +617,7 @@ const startMetricsServer = () => {
 // Connect to Redis, publish once, then publish on an interval.
 const start = async () => {
   await initDatabase();
+  await waitForSchema();
 
   const client = createClient({ url: `redis://${redisHost}:${redisPort}` });
   client.on("error", (err) => logger.error({ err }, "Redis error"));

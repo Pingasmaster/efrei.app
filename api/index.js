@@ -5387,6 +5387,8 @@ const ensureTrigger = async (triggerName, createSql) => {
   }
 };
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 const ensureRole = async (name, description = null) => {
   await dbPool.query(
     "INSERT IGNORE INTO roles (name, description) VALUES (?, ?)",
@@ -5822,6 +5824,28 @@ const ensureSchema = async () => {
   await seedRbac();
 };
 
+const ensureSchemaWithRetry = async () => {
+  const retryableErrors = new Set([
+    "ER_FK_CANNOT_OPEN_PARENT",
+    "ER_NO_SUCH_TABLE",
+    "ER_BAD_DB_ERROR"
+  ]);
+  const maxAttempts = 10;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      await ensureSchema();
+      return;
+    } catch (error) {
+      const shouldRetry = retryableErrors.has(error.code);
+      if (!shouldRetry || attempt === maxAttempts) {
+        throw error;
+      }
+      logger.warn({ attempt, maxAttempts, err: error }, "Schema not ready, retrying");
+      await sleep(2000);
+    }
+  }
+};
+
 const bootstrapAdmin = async () => {
   if (!adminBootstrapEmail && !adminBootstrapUserId) {
     return;
@@ -5887,7 +5911,7 @@ const initDatabase = async () => {
     }
   }
 
-  await ensureSchema();
+  await ensureSchemaWithRetry();
   await bootstrapAdmin();
 };
 
