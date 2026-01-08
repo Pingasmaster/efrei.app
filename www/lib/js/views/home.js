@@ -7,39 +7,42 @@ const formatTime = (value) => {
 
 export const renderHome = (root, { state }) => {
     root.innerHTML = `
-        <section class="hero">
-            <div class="hero-copy">
-                <p class="eyebrow">Efrei Betting Platform</p>
-                <h1>Bet on campus life.</h1>
+        <div class="home-container">
+            <div class="home-hero">
+                <p class="hero-eyebrow">Efrei Betting Platform</p>
+                <h1>BET ON<br>CAMPUS<br>LIFE</h1>
                 <p class="lead">
                     Place bets on what happens at Efrei with points. Win rewards like homework help, AI credits, and exclusive perks. No real money, just pure fun.
                 </p>
                 <div class="hero-actions">
-                    <a class="btn primary" href="/signup" data-link>Start betting</a>
-                    <a class="btn ghost" href="/login" data-link>Sign in</a>
+                    <a class="btn primary" href="/signup" data-link>Start Betting</a>
+                    <a class="btn ghost" href="/login" data-link>Sign In</a>
                 </div>
             </div>
-            <div class="hero-card">
-                <div class="stat">
-                    <span class="stat-value">Points System</span>
-                    <span class="stat-label">Bet safely with virtual points, not real money</span>
-                </div>
-                <div class="stat">
-                    <span class="stat-value">Real Rewards</span>
-                    <span class="stat-label">Exchange points for homework help & AI queries</span>
-                </div>
-                <div class="stat">
-                    <span class="stat-value">Live Updates</span>
-                    <span class="stat-label">Real-time odds on campus events</span>
-                </div>
-            </div>
-        </section>
 
-        <section class="market-layout">
+            <div class="home-sidebar">
+                <div class="sidebar-stats">
+                    <div class="stat-item">
+                        <span class="stat-value">Points System</span>
+                        <span class="stat-label">Bet safely with virtual points, not real money</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-value">Real Rewards</span>
+                        <span class="stat-label">Exchange points for homework help & AI queries</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-value">Live Updates</span>
+                        <span class="stat-label">Real-time odds on campus events</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <section class="markets-section">
             <div class="markets">
                 <div class="markets-header">
                     <div>
-                        <p class="eyebrow">Live Markets</p>
+                        <span class="eyebrow">Live Markets</span>
                         <h2>Campus Events</h2>
                     </div>
                     <span class="status-pill" data-odds-status>Offline</span>
@@ -49,7 +52,7 @@ export const renderHome = (root, { state }) => {
 
             <aside class="bet-slip">
                 <div class="bet-slip-header">
-                    <h3>Bet slip</h3>
+                    <h3>Bet Slip</h3>
                     <span class="badge" data-slip-count>0</span>
                 </div>
                 <div class="bet-slip-list" data-slip-list></div>
@@ -59,11 +62,11 @@ export const renderHome = (root, { state }) => {
                         <input type="number" min="1" value="10" data-stake>
                     </label>
                     <div class="summary-row">
-                        <span>Potential return</span>
+                        <span>Potential Return</span>
                         <strong data-return>€0.00</strong>
                     </div>
-                    <button class="btn primary" type="button" data-place-bet disabled>Place bet</button>
-                    <button class="btn ghost" type="button" data-clear-slip>Clear slip</button>
+                    <button class="btn primary" type="button" data-place-bet disabled>Place Bet</button>
+                    <button class="btn ghost" type="button" data-clear-slip>Clear Slip</button>
                     <div class="form-status" role="status" aria-live="polite" data-slip-status></div>
                 </div>
             </aside>

@@ -1,11 +1,26 @@
 export const renderSignup = (root, { api, updateStatus, navigate }) => {
     root.innerHTML = `
-        <section class="auth">
-            <div class="auth-card">
-                <p class="eyebrow">Join Efrei.bet</p>
-                <h1>Start your betting journey</h1>
+        <div class="signup-container">
+            <div class="signup-header">
+                <p class="auth-eyebrow">Join Efrei.bet</p>
+                <h1>START YOUR<br>BETTING JOURNEY</h1>
                 <p class="lead">Get free points to start, bet on campus events, and win amazing rewards.</p>
+            </div>
 
+            <div class="signup-benefits left">
+                <div class="benefit-card">
+                    <div class="benefit-number">01</div>
+                    <h3>Free Starting Points</h3>
+                    <p>Every new member gets starter points to begin betting right away. No deposit required.</p>
+                </div>
+                <div class="benefit-card">
+                    <div class="benefit-number">02</div>
+                    <h3>Campus Community</h3>
+                    <p>Join hundreds of Efrei students betting on what happens next on campus.</p>
+                </div>
+            </div>
+
+            <div class="signup-form-wrapper">
                 <form id="signup-form" class="form">
                     <label class="field">
                         <span>Name</span>
@@ -19,24 +34,25 @@ export const renderSignup = (root, { api, updateStatus, navigate }) => {
                         <span>Password</span>
                         <input type="password" name="password" autocomplete="new-password" minlength="6" placeholder="Create a secure password" required>
                     </label>
-                    <button class="btn primary" type="submit">Create account</button>
+                    <button class="btn primary" type="submit">Create Account</button>
                     <div class="form-status" role="status" aria-live="polite"></div>
                 </form>
-
                 <p class="form-note">Already have an account? <a href="/login" data-link>Sign in here</a></p>
             </div>
 
-            <aside class="auth-aside">
-                <div class="aside-card">
-                    <h2>Free Starting Points</h2>
-                    <p>Every new member gets starter points to begin betting right away.</p>
+            <div class="signup-benefits right">
+                <div class="benefit-card">
+                    <div class="benefit-number">03</div>
+                    <h3>Real Rewards</h3>
+                    <p>Exchange your points for homework help, AI queries, priority support, and more.</p>
                 </div>
-                <div class="aside-card">
-                    <h2>Campus Community</h2>
-                    <p>Join hundreds of Efrei students betting on what happens next on campus.</p>
+                <div class="benefit-card">
+                    <div class="benefit-number">04</div>
+                    <h3>Safe & Fun</h3>
+                    <p>No real money involved. Just friendly competition and exciting campus events.</p>
                 </div>
-            </aside>
-        </section>
+            </div>
+        </div>
     `;
 
     const form = root.querySelector("#signup-form");

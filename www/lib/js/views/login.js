@@ -1,38 +1,43 @@
 export const renderLogin = (root, { api, state, updateStatus, navigate }) => {
     root.innerHTML = `
-        <section class="auth">
-            <div class="auth-card">
-                <p class="eyebrow">Welcome back</p>
-                <h1>Sign in to Efrei.bet</h1>
-                <p class="lead">Your points and bets are waiting. Let's see what's happening on campus today.</p>
+        <div class="login-container">
+            <div class="login-wrapper">
+                <div class="login-main">
+                    <p class="auth-eyebrow">Welcome Back</p>
+                    <h1 class="auth-title">Sign In</h1>
+                    <p class="auth-lead">Your points and bets are waiting. Let's see what's happening on campus today.</p>
 
-                <form id="login-form" class="form">
-                    <label class="field">
-                        <span>Email</span>
-                        <input type="email" name="email" autocomplete="email" placeholder="your.name@efrei.fr" required>
-                    </label>
-                    <label class="field">
-                        <span>Password</span>
-                        <input type="password" name="password" autocomplete="current-password" minlength="6" placeholder="Enter your password" required>
-                    </label>
-                    <button class="btn primary" type="submit">Sign in</button>
-                    <div class="form-status" role="status" aria-live="polite"></div>
-                </form>
+                    <form id="login-form" class="form">
+                        <label class="field">
+                            <span>Email</span>
+                            <input type="email" name="email" autocomplete="email" placeholder="your.name@efrei.fr" required>
+                        </label>
+                        <label class="field">
+                            <span>Password</span>
+                            <input type="password" name="password" autocomplete="current-password" minlength="6" placeholder="Enter your password" required>
+                        </label>
+                        <button class="btn primary" type="submit">Sign In</button>
+                        <div class="form-status" role="status" aria-live="polite"></div>
+                    </form>
 
-                <p class="form-note">No account yet? <a href="/signup" data-link>Join the fun</a></p>
+                    <p class="form-note">No account yet? <a href="/signup" data-link>Join the fun</a></p>
+                </div>
+
+                <div class="login-accent">
+                    <div class="accent-content">
+                        <h2>Campus Betting</h2>
+                        <div class="accent-feature">
+                            <h3>Virtual Points</h3>
+                            <p>Bet safely with points. No real money involved, just campus competition.</p>
+                        </div>
+                        <div class="accent-feature">
+                            <h3>Earn Rewards</h3>
+                            <p>Win points and exchange them for homework help, AI queries, and more.</p>
+                        </div>
+                    </div>
+                </div>
             </div>
-
-            <aside class="auth-aside">
-                <div class="aside-card">
-                    <h2>Virtual Points</h2>
-                    <p>Bet safely with points. No real money involved, just campus competition.</p>
-                </div>
-                <div class="aside-card">
-                    <h2>Earn Rewards</h2>
-                    <p>Win points and exchange them for homework help, AI queries, and more.</p>
-                </div>
-            </aside>
-        </section>
+        </div>
     `;
 
     const form = root.querySelector("#login-form");
