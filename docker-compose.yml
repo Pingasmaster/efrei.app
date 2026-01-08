@@ -1,0 +1,80 @@
+version: "3.9"
+
+services:
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Containerfile
+    ports:
+      - "8080:80"
+    depends_on:
+      - gateway
+    networks:
+      - internal
+
+  gateway:
+    build:
+      context: .
+      dockerfile: gateway/Containerfile
+    environment:
+      PORT: "3000"
+      JWT_SECRET: "change-me"
+      BUSINESS_API_URL: "http://api:4000"
+      DB_HOST: "mysql"
+      DB_PORT: "3306"
+      DB_NAME: "efrei"
+      DB_USER: "efrei"
+      DB_PASSWORD: "efrei"
+      REDIS_HOST: "redis"
+      REDIS_PORT: "6379"
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+      - mysql
+      - redis
+    networks:
+      - internal
+
+  api:
+    build:
+      context: .
+      dockerfile: api/Containerfile
+    environment:
+      PORT: "4000"
+      DB_HOST: "mysql"
+      DB_PORT: "3306"
+      DB_NAME: "efrei"
+      DB_USER: "efrei"
+      DB_PASSWORD: "efrei"
+      REDIS_HOST: "redis"
+      REDIS_PORT: "6379"
+    depends_on:
+      - mysql
+      - redis
+    networks:
+      - internal
+
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: "root"
+      MYSQL_DATABASE: "efrei"
+      MYSQL_USER: "efrei"
+      MYSQL_PASSWORD: "efrei"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - internal
+
+  redis:
+    image: redis:7.2-alpine
+    networks:
+      - internal
+
+volumes:
+  mysql_data:
+
+networks:
+  internal:
+    driver: bridge

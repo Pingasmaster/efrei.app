@@ -4,10 +4,18 @@ class App {
         this.currentPage = "Home";
         this.pages = [
             "Home" : new Home(),
-            "Test1": new Test1()
+            "Login": new Login(),
+            "Signup": new Signup(),
+            "Profil": new Profil(),
+            "Magasin": new Magasin(),
+            "Paris": new Paris(),
         ];
         this.titles = [
             "Home": "Accueil",
+            "Test1": "Test 1 - Première page de test"
+            "Home": "Accueil",
+            "Test1": "Test 1 - Première page de test"
+            "Test1": "Test 1 - Première page de test"
             "Test1": "Test 1 - Première page de test"
         ];
         // Log init
