@@ -16,9 +16,16 @@ const promClient = require("prom-client");
 const app = express();
 // Runtime configuration (defaults match docker-compose service names/ports).
 const port = process.env.PORT || 3000;
-const jwtSecret = process.env.JWT_SECRET || "dev-secret";
+const jwtSecret = process.env.JWT_SECRET;
 const businessApiUrl = process.env.BUSINESS_API_URL || "http://api:4000";
 const logLevel = process.env.LOG_LEVEL || "info";
+const trustProxy = process.env.TRUST_PROXY || "loopback, linklocal, uniquelocal";
+
+if (!jwtSecret || jwtSecret === "change-me" || jwtSecret === "dev-secret") {
+  throw new Error("JWT_SECRET must be set to a non-default value.");
+}
+
+app.set("trust proxy", trustProxy);
 
 // MySQL configuration (consumed from .env / docker-compose).
 const dbHost = process.env.DB_HOST || "mysql";
@@ -161,7 +168,9 @@ app.use((req, res, next) => {
   const startedAt = process.hrtime.bigint();
   res.on("finish", () => {
     const durationMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
-    const route = req.route?.path ? `${req.baseUrl || ""}${req.route.path}` : req.path;
+    const route = req.route?.path
+      ? `${req.baseUrl || ""}${req.route.path}`
+      : (req.baseUrl || "unmatched");
     const status = String(res.statusCode || 0);
     const method = req.method;
     httpRequestsTotal.inc({ method, route, status });
@@ -392,13 +401,7 @@ const enrichUser = async (user) => {
   };
 };
 
-const getClientIp = (req) => {
-  const forwarded = req.headers["x-forwarded-for"];
-  if (typeof forwarded === "string" && forwarded.trim()) {
-    return forwarded.split(",")[0].trim();
-  }
-  return req.ip;
-};
+const getClientIp = (req) => req.ip;
 
 const getDeviceFingerprint = (req) => {
   const userAgent = req.headers["user-agent"] || "";
@@ -614,22 +617,6 @@ const requireSuperAdmin = (req, res, next) => {
     return res.status(403).json({ ok: false, message: "Super admin access required." });
   }
   return next();
-};
-
-const getCachedUserByEmail = async (email) => {
-  if (!redisClient) {
-    return null;
-  }
-  const cacheKey = `auth:user:${email}`;
-  const cached = await redisClient.get(cacheKey);
-  if (!cached) {
-    return null;
-  }
-  try {
-    return JSON.parse(cached);
-  } catch (error) {
-    return null;
-  }
 };
 
 const setCachedUser = async (user) => {
@@ -1058,6 +1045,7 @@ app.post(
 const apiProxy = createProxyMiddleware({
   target: businessApiUrl,
   changeOrigin: true,
+  xfwd: true,
   pathRewrite: { "^/api": "" },
   onProxyReq: (proxyReq, req) => {
     if (req.requestId) {
@@ -1071,6 +1059,7 @@ const wsProxy = createProxyMiddleware({
   target: businessApiUrl,
   changeOrigin: true,
   ws: true,
+  xfwd: true,
   onProxyReqWs: (proxyReq, req) => {
     if (req.requestId) {
       proxyReq.setHeader("X-Request-Id", req.requestId);

@@ -5,6 +5,15 @@ const formatTime = (value) => {
     return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 };
 
+const escapeHtml = (value) => {
+    return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+};
+
 export const renderHome = (root, { state }) => {
     root.innerHTML = `
         <div class="home-container">
@@ -95,25 +104,31 @@ export const renderHome = (root, { state }) => {
                 const selections = event.markets
                     .map((selection) => {
                         const selected = selectedIds.has(selection.id) ? "selected" : "";
+                        const selectionId = escapeHtml(selection.id);
+                        const eventId = escapeHtml(event.id);
+                        const label = escapeHtml(selection.label);
                         return `
-                            <button class="selection ${selected}" type="button" data-selection-id="${selection.id}" data-event-id="${event.id}" data-label="${selection.label}" data-price="${selection.price}">
-                                <span>${selection.label}</span>
+                            <button class="selection ${selected}" type="button" data-selection-id="${selectionId}" data-event-id="${eventId}" data-label="${label}" data-price="${selection.price}">
+                                <span>${label}</span>
                                 <strong>${selection.price.toFixed(2)}</strong>
                             </button>
                         `;
                     })
                     .join("");
 
+                const league = escapeHtml(event.league);
+                const home = escapeHtml(event.home);
+                const away = escapeHtml(event.away);
                 return `
                     <article class="event-card">
                         <div class="event-meta">
-                            <span class="event-league">${event.league}</span>
+                            <span class="event-league">${league}</span>
                             <span class="event-time">${formatTime(event.startsAt)}</span>
                         </div>
                         <div class="event-teams">
-                            <span>${event.home}</span>
+                            <span>${home}</span>
                             <span class="versus">vs</span>
-                            <span>${event.away}</span>
+                            <span>${away}</span>
                         </div>
                         <div class="event-selections">
                             ${selections}
@@ -135,10 +150,11 @@ export const renderHome = (root, { state }) => {
 
         slipList.innerHTML = snapshot.betslip
             .map((item) => {
+                const label = escapeHtml(item.label);
                 return `
                     <div class="slip-item">
                         <div>
-                            <span class="slip-label">${item.label}</span>
+                            <span class="slip-label">${label}</span>
                             <span class="slip-odds">${item.price.toFixed(2)}</span>
                         </div>
                         <button class="slip-remove" type="button" data-slip-remove="${item.id}">Remove</button>

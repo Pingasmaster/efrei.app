@@ -71,6 +71,7 @@ Fichier `.env.example` :
 - **Gateway/API**
   - `JWT_SECRET` (sert à **amorcer** `auth_secrets` s’il est vide)
   - `BUSINESS_API_URL` (gateway -> api)
+  - `TRUST_PROXY` (optionnel, défaut `loopback, linklocal, uniquelocal`)
 - **DB**
   - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `MYSQL_ROOT_PASSWORD`
 - **Redis**
@@ -92,7 +93,7 @@ Fichier `.env.example` :
 - **Super admin bootstrap**
   - `ADMIN_BOOTSTRAP_EMAIL` ou `ADMIN_BOOTSTRAP_USER_ID`
 
-**Important :** le gateway et l’API lisent leurs secrets depuis `auth_secrets`. `JWT_SECRET` sert uniquement de secret initial si la table est vide.
+**Important :** le gateway et l’API lisent leurs secrets depuis `auth_secrets`. `JWT_SECRET` sert uniquement de secret initial si la table est vide, **mais il doit être défini à une valeur non‑défaut** (les services échouent au démarrage sinon).
 
 ---
 
@@ -175,7 +176,7 @@ RBAC fin basé sur permissions (utilisé côté API/gateway).
 ### Table `payout_jobs`
 - `bet_id`, `result_option_id`, `resolved_by`
 - `payload` (JSON)
-- `status` (`queued`, `processing`, `completed`, `failed`, `retry_wait`, `dead`)
+- `status` (`queued`, `processing`, `completed`, `retry_wait`, `dead`)
 - `error_message`, `attempts`, `max_attempts`
 - `next_attempt_at`, `last_error_at`, `dead_at`
 - `started_at`, `completed_at`, `created_at`, `updated_at`
@@ -205,6 +206,7 @@ Append-only (aucun endpoint de suppression).
 - **Refresh token** : stocké hashé en DB, **rotated** à chaque refresh.
 - **Refresh token lié au device** : `refresh_tokens.device_id` permet d’identifier le device d’origine et de révoquer un device ou une session spécifique.
 - **Rotation de secret** : endpoint admin dédié (gateway) => ancien secret reste valide pendant une période de grâce.
+- **Endpoints publics** : les routes en auth optionnelle tolèrent un token invalide (le client est traité comme anonyme).
 
 ### Rôles
 - **Super admin** :

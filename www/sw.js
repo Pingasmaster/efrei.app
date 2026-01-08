@@ -44,6 +44,14 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
+  const path = url.pathname || "";
+  if (path.startsWith("/api/") || path.startsWith("/auth/") || path.startsWith("/ws/")) {
+    return;
+  }
+  if (event.request.headers.get("authorization")) {
+    return;
+  }
+
   const isNavigation = event.request.mode === "navigate";
 
   event.respondWith(

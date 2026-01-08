@@ -19,8 +19,15 @@ extendZodWithOpenApi(z);
 
 const app = express();
 const port = process.env.PORT || 4000;
-const jwtSecret = process.env.JWT_SECRET || "dev-secret";
+const jwtSecret = process.env.JWT_SECRET;
 const logLevel = process.env.LOG_LEVEL || "info";
+const trustProxy = process.env.TRUST_PROXY || "loopback, linklocal, uniquelocal";
+
+if (!jwtSecret || jwtSecret === "change-me" || jwtSecret === "dev-secret") {
+  throw new Error("JWT_SECRET must be set to a non-default value.");
+}
+
+app.set("trust proxy", trustProxy);
 
 // Redis configuration for realtime odds.
 const redisHost = process.env.REDIS_HOST || "redis";
@@ -109,7 +116,9 @@ app.use((req, res, next) => {
   const startedAt = process.hrtime.bigint();
   res.on("finish", () => {
     const durationMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
-    const route = req.route?.path ? `${req.baseUrl || ""}${req.route.path}` : req.path;
+    const route = req.route?.path
+      ? `${req.baseUrl || ""}${req.route.path}`
+      : (req.baseUrl || "unmatched");
     const status = String(res.statusCode || 0);
     const method = req.method;
     httpRequestsTotal.inc({ method, route, status });
@@ -1218,7 +1227,8 @@ const authenticate = async (req, res, next) => {
     req.user = user;
     return next();
   } catch (error) {
-    return res.status(401).json({ ok: false, message: "Invalid or expired token." });
+    req.user = null;
+    return next();
   }
 };
 
@@ -4237,12 +4247,6 @@ app.get(
           metadata: { count: bets.length, limit, offset, sort: sortColumn, order: orderSql, search }
         });
       }
-      await logAudit(dbPool, {
-        actorUserId: req.user.id,
-        action: "bet_pending_resolution_list",
-        reason: "bet_pending_resolution",
-        metadata: { count: bets.length, limit, offset }
-      });
       return res.json({
         ok: true,
         bets: bets.map((bet) => serializeBet(bet, optionsByBet.get(Number(bet.id)) || []))

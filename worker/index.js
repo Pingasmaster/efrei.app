@@ -511,7 +511,7 @@ const pollQueuedJobs = async () => {
   const [rows] = await dbPool.query(
     `SELECT id
      FROM payout_jobs
-     WHERE status IN ('queued', 'failed')
+     WHERE status = 'queued'
         OR (status = 'retry_wait' AND (next_attempt_at IS NULL OR next_attempt_at <= NOW()))
         OR (status = 'processing' AND started_at IS NOT NULL AND started_at < (NOW() - INTERVAL 15 MINUTE))
      ORDER BY created_at ASC
