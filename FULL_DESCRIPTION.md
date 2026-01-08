@@ -20,7 +20,7 @@ Services principaux :
 - **mysql** : persistance des données.
 - **redis** :
   - Pub/sub odds (realtime) pour l’API.
-- **odds-worker** : publie les cotes dans Redis.
+- **odds-worker** : publie les cotes dans Redis + traite la queue de payouts des paris.
 - **env-check** : valide l’environnement `.env` avant boot.
 
 Flux :
@@ -29,6 +29,8 @@ client -> gateway (auth + proxy) -> api (métier)
 client -> gateway /ws -> api /ws/odds
 api <-> mysql
 api <-> redis (odds pub/sub)
+worker <-> mysql (payouts)
+worker <-> redis (odds + queue payouts)
 ```
 
 Note : la création de schéma MySQL est centralisée côté **api** (pour dev). Le gateway n’initialise plus les tables.
@@ -49,6 +51,8 @@ Fichier `.env.example` :
   - `REDIS_HOST`, `REDIS_PORT`
 - **Odds**
   - `ODDS_CHANNEL`, `ODDS_INTERVAL_MS`
+- **Queue payouts**
+  - `PAYOUT_QUEUE`, `PAYOUT_POLL_INTERVAL_MS`
 - **Refresh tokens**
   - `REFRESH_TOKEN_DAYS`
 - **Auth cache (gateway)**
@@ -72,6 +76,17 @@ Champs principaux :
 - `profile_alias` (pseudonyme public optionnel)
 - `profile_quote` (citation optionnelle)
 - `created_at`, `updated_at`
+
+### Tables RBAC (`roles`, `permissions`, `role_permissions`, `user_roles`)
+RBAC fin basé sur permissions (utilisé côté API/gateway).
+- `roles` : `admin`, `super_admin`, extensible.
+- `permissions` : `admin.access`, `admin.super`, etc.
+- `role_permissions` : mapping M:N.
+- `user_roles` : attribution des rôles (avec `assigned_by`).
+
+### Table `user_devices`
+- `user_id`, `fingerprint`, `user_agent`, `last_ip`
+- `first_seen`, `last_seen`
 
 ### Table `user_groups`
 - `name`, `description`
@@ -106,7 +121,7 @@ Champs principaux :
 - `group_id` (NULL = public)
 - `title`, `description`, `details`
 - `bet_type` (`boolean`, `number`, `multiple`)
-- `closes_at`, `status` (`open`, `closed`, `cancelled`, `resolved`), `result_option_id`
+- `closes_at`, `status` (`open`, `closed`, `cancelled`, `resolving`, `resolved`), `result_option_id`
 - `resolved_at`, `created_at`, `updated_at`
 
 ### Table `bet_options`
@@ -124,6 +139,16 @@ Champs principaux :
 ### Table `refresh_tokens`
 - `user_id`, `token_hash`, `expires_at`, `revoked_at`, `last_used_at`, `created_at`
 
+### Table `payout_jobs`
+- `bet_id`, `result_option_id`, `resolved_by`
+- `payload` (JSON)
+- `status` (`queued`, `processing`, `completed`, `failed`)
+- `error_message`, `attempts`, `started_at`, `completed_at`, `created_at`, `updated_at`
+
+### Table `idempotency_keys`
+- `idem_key`, `user_id`, `route`, `method`, `request_hash`
+- `status`, `response_status`, `response_body`, `created_at`, `completed_at`
+
 ### Table `audit_logs`
 Append-only (aucun endpoint de suppression).
 - `actor_user_id`, `target_user_id`
@@ -132,6 +157,9 @@ Append-only (aucun endpoint de suppression).
 - `related_entity_type`, `related_entity_id`
 - `metadata` (JSON)
 - `created_at`
+
+### Contraintes points
+- `CHECK(points >= 0)` + triggers `INSERT/UPDATE` pour empêcher des points négatifs.
 
 ---
 
@@ -157,6 +185,14 @@ Append-only (aucun endpoint de suppression).
   - toutes les requêtes authentifiées sont refusées
   - leurs points sont transférés au super admin lors du ban
 
+### RBAC (permissions)
+- Les checks passent par `roles`/`permissions` (ex: `admin.access`, `admin.super`).
+- `is_admin` / `is_super_admin` restent **legacy** pour compatibilité, mais la logique métier s’appuie sur RBAC.
+
+### Détection d’appareils
+- Empreinte d’appareil (`user_devices`) à la connexion/inscription.
+- Audit `auth_new_device` si un device inédit est détecté.
+
 ### Profils & visibilité
 - Un profil peut être **public** ou **privé**.
 - Si `public` et qu’un `profile_alias` est défini, il remplace le nom dans la vue publique.
@@ -169,6 +205,11 @@ Append-only (aucun endpoint de suppression).
 - Limitation globale (gateway + api)
 - Limitation renforcée sur endpoints sensibles (auth / admin)
 - **Backoff exponentiel** sur les endpoints sensibles
+- Clé combinant **IP + email** pour l’auth afin de réduire le bruteforce
+
+### Idempotency keys
+- Header `Idempotency-Key` supporté sur les endpoints **qui déplacent des points** (ex: accept offer, buy/sell bet, resolve/cancel bet).
+- Évite le double spend en cas de retry client.
 
 ---
 
@@ -192,7 +233,7 @@ Append-only (aucun endpoint de suppression).
 Le système loggue :
 - Toutes les transactions de points (admin credit/debit, achat d’offre, cashout, gains, refunds, transfert de ban, points initiaux…)
 - Toutes les actions admin et actions métier sensibles
-- Connexion / déconnexion / refresh
+- Connexion / déconnexion / refresh + **nouveaux devices**
 
 Endpoint dédié : `GET /admin/logs`
 
@@ -208,8 +249,9 @@ Endpoint dédié : `GET /admin/logs`
 - Effets:
   - Crée un user (1000 points)
   - Si l’email correspond au bootstrap, l’utilisateur devient **super admin**
-  - Retourne `token` (JWT) + `refreshToken`
-  - Log audit `auth_register` + points initiaux
+  - Retourne `token` (JWT) + `refreshToken` + `newDevice`
+  - `user` inclut `roles` + `permissions`
+  - Log audit `auth_register`, points initiaux + `auth_new_device` si device inédit
 - Restriction: publique
 
 ### POST `/auth/login`
@@ -218,8 +260,9 @@ Endpoint dédié : `GET /admin/logs`
 - Effets:
   - Vérifie hash
   - Bloque si user banni
-  - Retourne `token` + `refreshToken`
-  - Log audit `auth_login`
+  - Retourne `token` + `refreshToken` + `newDevice`
+  - `user` inclut `roles` + `permissions`
+  - Log audit `auth_login` (+ `auth_new_device` si device inédit)
 - Restriction: publique
 
 ### POST `/auth/refresh`
@@ -277,25 +320,33 @@ Toutes les routes sensibles exigent:
 **But :** Endpoint stub (placeholder).
 - Restriction: publique
 
+#### GET `/openapi.json`
+**But :** Spéc OpenAPI générée automatiquement.
+- Restriction: publique
+
+#### GET `/docs`
+**But :** Swagger UI (OpenAPI).
+- Restriction: publique
+
 ---
 
 ### Users (admin)
 
 #### GET `/admin/users`
 **But :** Liste des utilisateurs.
-- Query: `limit`, `offset`
+- Query: `limit`, `offset`, `sort`, `order`, `search`
 - Restriction: admin ou super admin
 - Log: `admin_list_users`
 
 #### GET `/admin/users/banned`
 **But :** Liste des utilisateurs bannis.
-- Query: `limit`, `offset`
+- Query: `limit`, `offset`, `sort`, `order`, `search`
 - Restriction: admin ou super admin
 - Log: `admin_list_banned`
 
 #### GET `/admin/users/:id/logs`
 **But :** Audit logs ciblés.
-- Query: `limit`, `offset`
+- Query: `limit`, `offset`, `scope`, `sort`, `order`, `action`, `search`
 - Restriction: admin ou super admin
 
 #### POST `/admin/users/:id/unban`
@@ -310,18 +361,21 @@ Toutes les routes sensibles exigent:
   - User => `is_banned=1`
   - Log `admin_ban` + logs points
 - Restriction: admin ou super admin
+ - Idempotency-Key supporté
 
 #### POST `/admin/users/:id/points/credit`
 **But :** Créditer points.
 - Body: `{ amount }`
 - Restriction: admin ou super admin
 - Log: `admin_points_credit`
+ - Idempotency-Key supporté
 
 #### POST `/admin/users/:id/points/debit`
 **But :** Débiter points.
 - Body: `{ amount }`
 - Restriction: admin ou super admin
 - Log: `admin_points_debit`
+ - Idempotency-Key supporté
 
 #### POST `/admin/users/:id/promote`
 **But :** Promouvoir en admin.
@@ -335,7 +389,7 @@ Toutes les routes sensibles exigent:
 
 #### POST `/admin/users/:id/reset-password`
 **But :** Reset le mot de passe.
-- Body: `{ password }`
+- Body: `{ newPassword }`
 - Effets: révoque tous les refresh tokens
 - Restriction: admin ou super admin
 - Log: `admin_reset_password`
@@ -388,10 +442,12 @@ Toutes les routes sensibles exigent:
 
 #### GET `/admin/groups`
 **But :** Liste des groupes.
+- Query: `limit`, `offset`, `sort`, `order`, `search`
 - Restriction: admin ou super admin
 
 #### GET `/admin/groups/:id/members`
 **But :** Liste des membres d’un groupe.
+- Query: `limit`, `offset`, `sort`, `order`, `search`
 - Restriction: admin ou super admin
 
 #### POST `/admin/groups/:id/members`
@@ -401,7 +457,7 @@ Toutes les routes sensibles exigent:
 
 #### POST `/admin/groups/:id/members/batch`
 **But :** Ajouter plusieurs membres d’un coup.
-- Body: `{ userIds: number[], role? }`
+- Body: `{ userIds?: number[], users?: number[], role? }`
 - Restriction: admin ou super admin
 
 #### DELETE `/admin/groups/:id/members/:userId`
@@ -422,7 +478,7 @@ Toutes les routes sensibles exigent:
 
 #### GET `/offers`
 **But :** Lister les offres.
-- Query: `active=false` pour inclure inactives
+- Query: `active`, `limit`, `offset`, `sort`, `order`, `search`
 - Restriction: publique
 - Note: ne retourne que les offres publiques si non authentifié
 
@@ -438,6 +494,7 @@ Toutes les routes sensibles exigent:
   - Crédit créateur (points_cost)
   - Fee au super admin
   - Log audit + points
+ - Idempotency-Key supporté
 
 #### GET `/offers/:id/acceptances`
 **But :** Voir acceptations.
@@ -486,7 +543,7 @@ Toutes les routes sensibles exigent:
 
 #### GET `/bets`
 **But :** Lister paris.
-- Query: `active=true` -> ouverts seulement
+- Query: `active`, `limit`, `offset`, `sort`, `order`, `search`
 - Restriction: publique
 - Note: ne retourne que les paris publics si non authentifié
 
@@ -499,6 +556,7 @@ Toutes les routes sensibles exigent:
 - Body: `{ optionId, stakePoints }`
 - Restriction: authentifié
 - Log: `bet_buy` + points debit
+ - Idempotency-Key supporté
 
 #### POST `/bets/:id/sell`
 **But :** Vendre une position (cashout).
@@ -508,24 +566,29 @@ Toutes les routes sensibles exigent:
   - Crédit net (fee déduite)
   - Fee vers super admin
   - Log `bet_sell`
+ - Idempotency-Key supporté
 
 #### GET `/bets/:id/positions`
 **But :** Lister positions de l’utilisateur connecté.
+- Query: `limit`, `offset`, `sort`, `order`
 - Restriction: authentifié
 
 #### GET `/admin/bets/pending-resolution`
 **But :** Liste des paris clos sans résultat.
+- Query: `limit`, `offset`
 - Restriction: admin ou super admin
 
 #### POST `/admin/bets/:id/resolve`
-**But :** Résoudre un pari.
+**But :** Résoudre un pari (enqueue).
 - Body: `{ resultOptionId }`
 - Effets:
-  - Payouts gagnants (net)
-  - Fee vers super admin
-  - Log `bet_resolve`
+  - Passe le bet en `resolving`
+  - Crée un job `payout_jobs`
+  - Le worker calcule payouts + fees + log `bet_resolve`
+- Retourne `jobId`
 - Restriction: admin ou super admin
 - **Interdit sur bet du super admin si admin non-super**
+ - Idempotency-Key supporté
 
 #### PATCH `/admin/bets/:id`
 **But :** Modifier un pari.
@@ -561,6 +624,7 @@ Toutes les routes sensibles exigent:
   - Log `bet_cancel`
 - Restriction: admin ou super admin
 - **Interdit sur bet du super admin si admin non-super**
+ - Idempotency-Key supporté
 
 ---
 
@@ -568,7 +632,7 @@ Toutes les routes sensibles exigent:
 
 #### GET `/admin/logs`
 **But :** Consulter l’audit.
-- Query: `limit`, `offset`, `action`, `targetUserId`
+- Query: `limit`, `offset`, `sort`, `order`, `action`, `search`, `actorUserId`, `targetUserId`, `relatedEntityType`, `relatedEntityId`
 - Restriction: admin ou super admin
 - Log: `admin_list_logs`
 
@@ -579,14 +643,3 @@ Toutes les routes sensibles exigent:
 - Log: `admin_fee_summary`
 
 ---
-
-## 8) Conclusion
-
-Le backend implémente :
-- Auth complète + refresh + rotation secret + rôles + ban
-- Marketplace d’offres + reviews
-- Paris avec options, cashout, fermeture & résolution
-- Frais 2% vers super admin + agrégat fees
-- Audit logs complets
-
-Cette base est cohérente pour un MVP backend. Les prochaines priorités réalistes sont la standardisation de la validation d’entrées (schémas), la sécurité opérationnelle (RBAC fin, métriques/alerting), et la robustesse des jobs/queues.

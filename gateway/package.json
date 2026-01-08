@@ -21,6 +21,7 @@
     "http-proxy-middleware": "^3.0.5",
     "jsonwebtoken": "^9.0.3",
     "mysql2": "^3.16.0",
-    "redis": "^5.10.0"
+    "redis": "^5.10.0",
+    "zod": "^4.3.5"
   }
 }

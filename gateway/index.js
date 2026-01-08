@@ -6,6 +6,7 @@ const http = require("http");
 const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
 const rateLimitModule = require("express-rate-limit");
+const { z } = require("zod");
 const mysql = require("mysql2/promise");
 const { createClient: createRedisClient } = require("redis");
 const { createProxyMiddleware } = require("http-proxy-middleware");
@@ -49,7 +50,8 @@ const createBackoffLimiter = ({
   windowMs,
   limit,
   baseDelayMs = 1000,
-  maxDelayMs = 5 * 60 * 1000
+  maxDelayMs = 5 * 60 * 1000,
+  getKey = null
 }) => {
   const penalties = new Map();
   const limiter = rateLimit({
@@ -58,7 +60,8 @@ const createBackoffLimiter = ({
     standardHeaders: "draft-8",
     legacyHeaders: false,
     handler: (req, res) => {
-      const key = `${req.ip}:${name}`;
+      const keySeed = getKey ? getKey(req) : req.ip;
+      const key = `${keySeed}:${name}`;
       const now = Date.now();
       const entry = penalties.get(key);
       let strikes = entry?.strikes ?? 0;
@@ -74,7 +77,8 @@ const createBackoffLimiter = ({
   });
 
   return (req, res, next) => {
-    const key = `${req.ip}:${name}`;
+    const keySeed = getKey ? getKey(req) : req.ip;
+    const key = `${keySeed}:${name}`;
     const now = Date.now();
     const entry = penalties.get(key);
     if (entry) {
@@ -102,7 +106,11 @@ const authLimiter = createBackoffLimiter({
   windowMs: 10 * 60 * 1000,
   limit: 10,
   baseDelayMs: 2000,
-  maxDelayMs: 5 * 60 * 1000
+  maxDelayMs: 5 * 60 * 1000,
+  getKey: (req) => {
+    const email = normalizeEmail(req.body?.email || "");
+    return email ? `${req.ip}:${email}` : req.ip;
+  }
 });
 
 // Allow browser clients and parse JSON request bodies.
@@ -136,13 +144,37 @@ const isEmailValid = (email) => {
   return trimmed.includes("@") && trimmed.includes(".") && trimmed.length <= 255;
 };
 
+const zEmail = z.string().trim().email().max(255);
+const zPassword = z.string().min(6).max(200);
+const zName = z.string().trim().min(1).max(160);
+const zRefreshToken = z.string().min(10).max(500);
+
+const validateRequest = (schema) => (req, res, next) => {
+  const parsed = schema.safeParse({ body: req.body, query: req.query, params: req.params });
+  if (!parsed.success) {
+    return res.status(400).json({
+      ok: false,
+      code: "VALIDATION_ERROR",
+      message: "Invalid request.",
+      issues: parsed.error.issues
+    });
+  }
+  req.body = parsed.data.body;
+  req.query = parsed.data.query;
+  req.params = parsed.data.params;
+  req.validated = parsed.data;
+  return next();
+};
+
 const toPublicUser = (user) => ({
   id: user.id,
   email: user.email,
   name: user.name,
   points: user.points,
   isAdmin: Boolean(user.isAdmin),
-  isSuperAdmin: Boolean(user.isSuperAdmin)
+  isSuperAdmin: Boolean(user.isSuperAdmin),
+  roles: Array.isArray(user.roles) ? user.roles : [],
+  permissions: Array.isArray(user.permissions) ? user.permissions : []
 });
 
 const logAudit = async (connection, {
@@ -213,6 +245,121 @@ const logPointChange = async (connection, {
     relatedEntityId,
     metadata
   });
+};
+
+const ensureRole = async (name, description = null) => {
+  await dbPool.query("INSERT IGNORE INTO roles (name, description) VALUES (?, ?)", [name, description]);
+  const [rows] = await dbPool.query("SELECT id FROM roles WHERE name = ?", [name]);
+  return rows[0]?.id;
+};
+
+const ensurePermission = async (name, description = null) => {
+  await dbPool.query("INSERT IGNORE INTO permissions (name, description) VALUES (?, ?)", [name, description]);
+  const [rows] = await dbPool.query("SELECT id FROM permissions WHERE name = ?", [name]);
+  return rows[0]?.id;
+};
+
+const ensureRolePermission = async (roleId, permissionId) => {
+  if (!roleId || !permissionId) return;
+  await dbPool.query(
+    "INSERT IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)",
+    [roleId, permissionId]
+  );
+};
+
+const ensureUserRole = async (userId, roleId, assignedBy = null) => {
+  if (!userId || !roleId) return;
+  await dbPool.query(
+    "INSERT IGNORE INTO user_roles (user_id, role_id, assigned_by) VALUES (?, ?, ?)",
+    [userId, roleId, assignedBy]
+  );
+};
+
+const seedRbac = async () => {
+  const adminRoleId = await ensureRole("admin", "Standard admin role");
+  const superRoleId = await ensureRole("super_admin", "Super admin role");
+  const adminAccessId = await ensurePermission("admin.access", "Access to admin endpoints");
+  const superAccessId = await ensurePermission("admin.super", "Super admin access");
+  await ensureRolePermission(adminRoleId, adminAccessId);
+  await ensureRolePermission(superRoleId, adminAccessId);
+  await ensureRolePermission(superRoleId, superAccessId);
+};
+
+const fetchUserRoles = async (userId) => {
+  const [rows] = await dbPool.query(
+    `SELECT r.name
+     FROM user_roles ur
+     JOIN roles r ON r.id = ur.role_id
+     WHERE ur.user_id = ?`,
+    [userId]
+  );
+  return rows.map((row) => row.name);
+};
+
+const fetchUserPermissions = async (userId) => {
+  const [rows] = await dbPool.query(
+    `SELECT DISTINCT p.name
+     FROM user_roles ur
+     JOIN role_permissions rp ON rp.role_id = ur.role_id
+     JOIN permissions p ON p.id = rp.permission_id
+     WHERE ur.user_id = ?`,
+    [userId]
+  );
+  return rows.map((row) => row.name);
+};
+
+const enrichUser = async (user) => {
+  if (!user) return null;
+  const roles = await fetchUserRoles(user.id);
+  const permissions = await fetchUserPermissions(user.id);
+  return {
+    ...user,
+    roles,
+    permissions,
+    isAdmin: permissions.includes("admin.access"),
+    isSuperAdmin: permissions.includes("admin.super")
+  };
+};
+
+const getClientIp = (req) => {
+  const forwarded = req.headers["x-forwarded-for"];
+  if (typeof forwarded === "string" && forwarded.trim()) {
+    return forwarded.split(",")[0].trim();
+  }
+  return req.ip;
+};
+
+const getDeviceFingerprint = (req) => {
+  const userAgent = req.headers["user-agent"] || "";
+  const language = req.headers["accept-language"] || "";
+  const ip = getClientIp(req) || "";
+  const raw = `${userAgent}|${language}|${ip}`;
+  return crypto.createHash("sha256").update(raw).digest("hex");
+};
+
+const upsertUserDevice = async (connection, userId, req) => {
+  const fingerprint = getDeviceFingerprint(req);
+  const userAgent = req.headers["user-agent"] || null;
+  const ip = getClientIp(req) || null;
+  const [result] = await connection.query(
+    `INSERT INTO user_devices (user_id, fingerprint, user_agent, last_ip)
+     VALUES (?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE last_ip = VALUES(last_ip), user_agent = VALUES(user_agent), last_seen = CURRENT_TIMESTAMP`,
+    [userId, fingerprint, userAgent, ip]
+  );
+  const isNewDevice = result.affectedRows === 1;
+  if (isNewDevice) {
+    await logAudit(connection, {
+      actorUserId: userId,
+      targetUserId: userId,
+      action: "auth_new_device",
+      reason: "new_device",
+      relatedEntityType: "user_device",
+      relatedEntityId: null,
+      metadata: { fingerprint, ip, userAgent }
+    });
+  }
+  return { fingerprint, isNewDevice };
 };
 
 const loadJwtSecrets = async () => {
@@ -326,10 +473,20 @@ const rotateJwtSecret = async (connection, newSecret, graceHours = 24) => {
 
 const fetchUserById = async (userId) => {
   const [rows] = await dbPool.query(
-    "SELECT id, email, name, points, is_admin AS isAdmin, is_super_admin AS isSuperAdmin, is_banned AS isBanned FROM users WHERE id = ?",
+    "SELECT id, email, name, points, is_banned AS isBanned FROM users WHERE id = ?",
     [userId]
   );
-  return rows[0] || null;
+  if (!rows.length) {
+    return null;
+  }
+  const baseUser = {
+    id: rows[0].id,
+    email: rows[0].email,
+    name: rows[0].name,
+    points: rows[0].points,
+    isBanned: Boolean(rows[0].isBanned)
+  };
+  return enrichUser(baseUser);
 };
 
 const authenticateToken = async (req, res, next) => {
@@ -362,14 +519,14 @@ const authenticateToken = async (req, res, next) => {
 };
 
 const requireAdmin = (req, res, next) => {
-  if (!req.user || !req.user.isAdmin) {
+  if (!req.user || !Array.isArray(req.user.permissions) || !req.user.permissions.includes("admin.access")) {
     return res.status(403).json({ ok: false, message: "Admin access required." });
   }
   return next();
 };
 
 const requireSuperAdmin = (req, res, next) => {
-  if (!req.user || !req.user.isSuperAdmin) {
+  if (!req.user || !Array.isArray(req.user.permissions) || !req.user.permissions.includes("admin.super")) {
     return res.status(403).json({ ok: false, message: "Super admin access required." });
   }
   return next();
@@ -439,214 +596,332 @@ const initRedis = async () => {
 };
 
 // Registration endpoint backed by MySQL and cached in Redis.
-app.post("/auth/register", authLimiter, async (req, res) => {
-  try {
-    const { name, email, password } = req.body || {};
-    const normalizedEmail = normalizeEmail(email);
-    const trimmedName = String(name || "").trim();
-    if (!trimmedName || !normalizedEmail || !password) {
-      return res.status(400).json({ ok: false, message: "Name, email, and password are required." });
-    }
-    if (!isEmailValid(normalizedEmail)) {
-      return res.status(400).json({ ok: false, message: "Invalid email format." });
-    }
-    if (String(password).length < 6) {
-      return res.status(400).json({ ok: false, message: "Password must be at least 6 characters." });
-    }
+app.post(
+  "/auth/register",
+  authLimiter,
+  validateRequest(
+    z.object({
+      params: z.object({}),
+      query: z.object({}),
+      body: z.object({
+        name: zName,
+        email: zEmail,
+        password: zPassword
+      })
+    })
+  ),
+  async (req, res) => {
+    const connection = await dbPool.getConnection();
+    try {
+      const { name, email, password } = req.body || {};
+      const normalizedEmail = normalizeEmail(email);
+      const trimmedName = String(name || "").trim();
+      if (!trimmedName || !normalizedEmail || !password) {
+        return res.status(400).json({ ok: false, message: "Name, email, and password are required." });
+      }
+      if (!isEmailValid(normalizedEmail)) {
+        return res.status(400).json({ ok: false, message: "Invalid email format." });
+      }
+      if (String(password).length < 6) {
+        return res.status(400).json({ ok: false, message: "Password must be at least 6 characters." });
+      }
 
-    const [existing] = await dbPool.query("SELECT id FROM users WHERE email = ?", [normalizedEmail]);
-    if (existing.length > 0) {
-      return res.status(409).json({ ok: false, message: "Email already registered." });
-    }
+      await connection.beginTransaction();
+      const [existing] = await connection.query("SELECT id FROM users WHERE email = ?", [normalizedEmail]);
+      if (existing.length > 0) {
+        await connection.rollback();
+        return res.status(409).json({ ok: false, message: "Email already registered." });
+      }
 
-    const passwordHash = await bcrypt.hash(password, 10);
-    const startingPoints = 1000;
-    const [result] = await dbPool.query(
-      "INSERT INTO users (email, name, password_hash, points) VALUES (?, ?, ?, ?)",
-      [normalizedEmail, trimmedName, passwordHash, startingPoints]
-    );
-
-    const isSuperAdmin =
-      (adminBootstrapUserId && result.insertId === adminBootstrapUserId) ||
-      (adminBootstrapEmail && normalizedEmail === adminBootstrapEmail);
-    if (isSuperAdmin) {
-      await dbPool.query(
-        "UPDATE users SET is_admin = 1, is_super_admin = 1 WHERE id = ?",
-        [result.insertId]
+      const passwordHash = await bcrypt.hash(password, 10);
+      const startingPoints = 1000;
+      const [result] = await connection.query(
+        "INSERT INTO users (email, name, password_hash, points) VALUES (?, ?, ?, ?)",
+        [normalizedEmail, trimmedName, passwordHash, startingPoints]
       );
+
+      const isSuperAdmin =
+        (adminBootstrapUserId && result.insertId === adminBootstrapUserId) ||
+        (adminBootstrapEmail && normalizedEmail === adminBootstrapEmail);
+      if (isSuperAdmin) {
+        await connection.query(
+          "UPDATE users SET is_admin = 1, is_super_admin = 1 WHERE id = ?",
+          [result.insertId]
+        );
+        try {
+          await seedRbac();
+          const adminRoleId = await ensureRole("admin", "Standard admin role");
+          const superRoleId = await ensureRole("super_admin", "Super admin role");
+          if (adminRoleId) {
+            await ensureUserRole(result.insertId, adminRoleId, result.insertId);
+          }
+          if (superRoleId) {
+            await ensureUserRole(result.insertId, superRoleId, result.insertId);
+          }
+        } catch (rbacError) {
+          console.warn("RBAC assignment skipped", rbacError);
+        }
+      }
+
+      const baseUser = {
+        id: result.insertId,
+        email: normalizedEmail,
+        name: trimmedName,
+        passwordHash,
+        points: startingPoints,
+        isBanned: false
+      };
+      const user = await enrichUser(baseUser);
+
+      const token = await signJwt({ sub: String(user.id), email: user.email });
+      const refreshToken = await issueRefreshToken(connection, user.id);
+      await logAudit(connection, {
+        actorUserId: user.id,
+        targetUserId: user.id,
+        action: "auth_register",
+        reason: "auth_register"
+      });
+      await logPointChange(connection, {
+        actorUserId: user.id,
+        targetUserId: user.id,
+        action: "register_points",
+        reason: "initial_points",
+        pointsBefore: 0,
+        pointsAfter: startingPoints
+      });
+      const deviceInfo = await upsertUserDevice(connection, user.id, req);
+
+      await connection.commit();
+      await setCachedUser(user);
+
+      return res.status(201).json({
+        ok: true,
+        user: toPublicUser(user),
+        token,
+        refreshToken,
+        newDevice: deviceInfo.isNewDevice
+      });
+    } catch (error) {
+      await connection.rollback();
+      if (error && error.code === "ER_DUP_ENTRY") {
+        return res.status(409).json({ ok: false, message: "Email already registered." });
+      }
+      console.error("Register error", error);
+      return res.status(500).json({ ok: false, message: "Registration failed." });
+    } finally {
+      connection.release();
     }
-
-    const user = {
-      id: result.insertId,
-      email: normalizedEmail,
-      name: trimmedName,
-      passwordHash,
-      points: startingPoints,
-      isAdmin: isSuperAdmin ? 1 : 0,
-      isSuperAdmin
-    };
-
-    await setCachedUser(user);
-
-    const token = await signJwt({ sub: String(user.id), email: user.email });
-    const refreshToken = await issueRefreshToken(dbPool, user.id);
-    await logAudit(dbPool, {
-      actorUserId: user.id,
-      targetUserId: user.id,
-      action: "auth_register",
-      reason: "auth_register"
-    });
-    await logPointChange(dbPool, {
-      actorUserId: user.id,
-      targetUserId: user.id,
-      action: "register_points",
-      reason: "initial_points",
-      pointsBefore: 0,
-      pointsAfter: startingPoints
-    });
-    return res.status(201).json({ ok: true, user: toPublicUser(user), token, refreshToken });
-  } catch (error) {
-    if (error && error.code === "ER_DUP_ENTRY") {
-      return res.status(409).json({ ok: false, message: "Email already registered." });
-    }
-    console.error("Register error", error);
-    return res.status(500).json({ ok: false, message: "Registration failed." });
   }
-});
+);
 
 // Login endpoint backed by MySQL with Redis caching.
-app.post("/auth/login", authLimiter, async (req, res) => {
-  try {
-    const { email, password } = req.body || {};
-    const normalizedEmail = normalizeEmail(email);
-    if (!normalizedEmail || !password) {
-      return res.status(400).json({ ok: false, message: "Email and password are required." });
-    }
+app.post(
+  "/auth/login",
+  authLimiter,
+  validateRequest(
+    z.object({
+      params: z.object({}),
+      query: z.object({}),
+      body: z.object({
+        email: zEmail,
+        password: zPassword
+      })
+    })
+  ),
+  async (req, res) => {
+    const connection = await dbPool.getConnection();
+    try {
+      const { email, password } = req.body || {};
+      const normalizedEmail = normalizeEmail(email);
+      if (!normalizedEmail || !password) {
+        return res.status(400).json({ ok: false, message: "Email and password are required." });
+      }
 
-    const [rows] = await dbPool.query(
-      "SELECT id, email, name, password_hash AS passwordHash, points, is_admin AS isAdmin, is_super_admin AS isSuperAdmin, is_banned AS isBanned FROM users WHERE email = ?",
-      [normalizedEmail]
-    );
-    if (!rows.length) {
-      return res.status(401).json({ ok: false, message: "Invalid credentials." });
-    }
-    const user = rows[0];
-    await setCachedUser(user);
+      const [rows] = await connection.query(
+        "SELECT id, email, name, password_hash AS passwordHash, points, is_banned AS isBanned FROM users WHERE email = ?",
+        [normalizedEmail]
+      );
+      if (!rows.length) {
+        return res.status(401).json({ ok: false, message: "Invalid credentials." });
+      }
+      const baseUser = {
+        id: rows[0].id,
+        email: rows[0].email,
+        name: rows[0].name,
+        passwordHash: rows[0].passwordHash,
+        points: rows[0].points,
+        isBanned: Boolean(rows[0].isBanned)
+      };
+      const user = await enrichUser(baseUser);
 
-    if (user.isBanned) {
-      return res.status(403).json({ ok: false, message: "User is banned." });
-    }
+      if (user.isBanned) {
+        return res.status(403).json({ ok: false, message: "User is banned." });
+      }
 
-    const matches = await bcrypt.compare(password, user.passwordHash);
-    if (!matches) {
-      return res.status(401).json({ ok: false, message: "Invalid credentials." });
-    }
+      const matches = await bcrypt.compare(password, user.passwordHash);
+      if (!matches) {
+        return res.status(401).json({ ok: false, message: "Invalid credentials." });
+      }
 
-    const token = await signJwt({ sub: String(user.id), email: user.email });
-    const refreshToken = await issueRefreshToken(dbPool, user.id);
-    await logAudit(dbPool, {
-      actorUserId: user.id,
-      targetUserId: user.id,
-      action: "auth_login",
-      reason: "auth_login"
-    });
-    return res.json({ ok: true, user: toPublicUser(user), token, refreshToken });
-  } catch (error) {
-    console.error("Login error", error);
-    return res.status(500).json({ ok: false, message: "Login failed." });
-  }
-});
+      await connection.beginTransaction();
+      const token = await signJwt({ sub: String(user.id), email: user.email });
+      const refreshToken = await issueRefreshToken(connection, user.id);
+      await logAudit(connection, {
+        actorUserId: user.id,
+        targetUserId: user.id,
+        action: "auth_login",
+        reason: "auth_login"
+      });
+      const deviceInfo = await upsertUserDevice(connection, user.id, req);
+      await connection.commit();
 
-app.post("/auth/refresh", authLimiter, async (req, res) => {
-  const { refreshToken } = req.body || {};
-  if (!refreshToken) {
-    return res.status(400).json({ ok: false, message: "refreshToken is required." });
-  }
-  const tokenHash = hashToken(refreshToken);
-  const connection = await dbPool.getConnection();
-  try {
-    await connection.beginTransaction();
-    const rotated = await rotateRefreshToken(connection, tokenHash);
-    if (!rotated) {
+      await setCachedUser(user);
+
+      return res.json({ ok: true, user: toPublicUser(user), token, refreshToken, newDevice: deviceInfo.isNewDevice });
+    } catch (error) {
       await connection.rollback();
-      return res.status(401).json({ ok: false, message: "Invalid refresh token." });
+      console.error("Login error", error);
+      return res.status(500).json({ ok: false, message: "Login failed." });
+    } finally {
+      connection.release();
     }
-    const [userRows] = await connection.query(
-      "SELECT id, email, name, points, is_admin AS isAdmin, is_super_admin AS isSuperAdmin, is_banned AS isBanned FROM users WHERE id = ?",
-      [rotated.userId]
-    );
-    if (!userRows.length) {
-      await connection.rollback();
-      return res.status(401).json({ ok: false, message: "User not found." });
-    }
-    const user = userRows[0];
-    if (user.isBanned) {
-      await connection.rollback();
-      return res.status(403).json({ ok: false, message: "User is banned." });
-    }
-    const token = await signJwt({ sub: String(user.id), email: user.email });
-    await logAudit(connection, {
-      actorUserId: user.id,
-      targetUserId: user.id,
-      action: "auth_refresh",
-      reason: "auth_refresh"
-    });
-    await connection.commit();
-    return res.json({ ok: true, user: toPublicUser(user), token, refreshToken: rotated.refreshToken });
-  } catch (error) {
-    await connection.rollback();
-    console.error("Refresh error", error);
-    return res.status(500).json({ ok: false, message: "Refresh failed." });
-  } finally {
-    connection.release();
   }
-});
+);
 
-app.post("/auth/logout", authenticateToken, async (req, res) => {
-  try {
+app.post(
+  "/auth/refresh",
+  authLimiter,
+  validateRequest(
+    z.object({
+      params: z.object({}),
+      query: z.object({}),
+      body: z.object({ refreshToken: zRefreshToken })
+    })
+  ),
+  async (req, res) => {
     const { refreshToken } = req.body || {};
-    if (refreshToken) {
-      const tokenHash = hashToken(refreshToken);
-      await dbPool.query("UPDATE refresh_tokens SET revoked_at = NOW() WHERE token_hash = ?", [tokenHash]);
+    if (!refreshToken) {
+      return res.status(400).json({ ok: false, message: "refreshToken is required." });
     }
-    await logAudit(dbPool, {
-      actorUserId: req.user.id,
-      targetUserId: req.user.id,
-      action: "auth_logout",
-      reason: "auth_logout"
-    });
-    return res.json({ ok: true });
-  } catch (error) {
-    console.error("Logout error", error);
-    return res.status(500).json({ ok: false, message: "Logout failed." });
+    const tokenHash = hashToken(refreshToken);
+    const connection = await dbPool.getConnection();
+    try {
+      await connection.beginTransaction();
+      const rotated = await rotateRefreshToken(connection, tokenHash);
+      if (!rotated) {
+        await connection.rollback();
+        return res.status(401).json({ ok: false, message: "Invalid refresh token." });
+      }
+      const [userRows] = await connection.query(
+        "SELECT id, email, name, points, is_banned AS isBanned FROM users WHERE id = ?",
+        [rotated.userId]
+      );
+      if (!userRows.length) {
+        await connection.rollback();
+        return res.status(401).json({ ok: false, message: "User not found." });
+      }
+      const baseUser = {
+        id: userRows[0].id,
+        email: userRows[0].email,
+        name: userRows[0].name,
+        points: userRows[0].points,
+        isBanned: Boolean(userRows[0].isBanned)
+      };
+      const user = await enrichUser(baseUser);
+      if (user.isBanned) {
+        await connection.rollback();
+        return res.status(403).json({ ok: false, message: "User is banned." });
+      }
+      const token = await signJwt({ sub: String(user.id), email: user.email });
+      await logAudit(connection, {
+        actorUserId: user.id,
+        targetUserId: user.id,
+        action: "auth_refresh",
+        reason: "auth_refresh"
+      });
+      await connection.commit();
+      return res.json({ ok: true, user: toPublicUser(user), token, refreshToken: rotated.refreshToken });
+    } catch (error) {
+      await connection.rollback();
+      console.error("Refresh error", error);
+      return res.status(500).json({ ok: false, message: "Refresh failed." });
+    } finally {
+      connection.release();
+    }
   }
-});
+);
 
-app.post("/admin/auth/rotate-secret", authenticateToken, requireSuperAdmin, async (req, res) => {
-  const { newSecret, graceHours } = req.body || {};
-  const secret = newSecret || crypto.randomBytes(48).toString("base64url");
-  const connection = await dbPool.getConnection();
-  try {
-    await connection.beginTransaction();
-    const secretId = await rotateJwtSecret(connection, secret, graceHours ?? 24);
-    await logAudit(connection, {
-      actorUserId: req.user.id,
-      targetUserId: req.user.id,
-      action: "auth_rotate_secret",
-      reason: "rotate_jwt_secret",
-      relatedEntityType: "auth_secret",
-      relatedEntityId: secretId
-    });
-    await connection.commit();
-    return res.json({ ok: true, secretId, graceHours: graceHours ?? 24 });
-  } catch (error) {
-    await connection.rollback();
-    console.error("Rotate JWT secret error", error);
-    return res.status(500).json({ ok: false, message: "Failed to rotate JWT secret." });
-  } finally {
-    connection.release();
+app.post(
+  "/auth/logout",
+  authenticateToken,
+  validateRequest(
+    z.object({
+      params: z.object({}),
+      query: z.object({}),
+      body: z.object({ refreshToken: zRefreshToken.optional() }).default({})
+    })
+  ),
+  async (req, res) => {
+    try {
+      const { refreshToken } = req.body || {};
+      if (refreshToken) {
+        const tokenHash = hashToken(refreshToken);
+        await dbPool.query("UPDATE refresh_tokens SET revoked_at = NOW() WHERE token_hash = ?", [tokenHash]);
+      }
+      await logAudit(dbPool, {
+        actorUserId: req.user.id,
+        targetUserId: req.user.id,
+        action: "auth_logout",
+        reason: "auth_logout"
+      });
+      return res.json({ ok: true });
+    } catch (error) {
+      console.error("Logout error", error);
+      return res.status(500).json({ ok: false, message: "Logout failed." });
+    }
   }
-});
+);
+
+app.post(
+  "/admin/auth/rotate-secret",
+  authenticateToken,
+  requireSuperAdmin,
+  validateRequest(
+    z.object({
+      params: z.object({}),
+      query: z.object({}),
+      body: z.object({
+        newSecret: z.string().min(20).max(255).optional(),
+        graceHours: z.coerce.number().int().min(0).max(168).optional()
+      }).default({})
+    })
+  ),
+  async (req, res) => {
+    const { newSecret, graceHours } = req.body || {};
+    const secret = newSecret || crypto.randomBytes(48).toString("base64url");
+    const connection = await dbPool.getConnection();
+    try {
+      await connection.beginTransaction();
+      const secretId = await rotateJwtSecret(connection, secret, graceHours ?? 24);
+      await logAudit(connection, {
+        actorUserId: req.user.id,
+        targetUserId: req.user.id,
+        action: "auth_rotate_secret",
+        reason: "rotate_jwt_secret",
+        relatedEntityType: "auth_secret",
+        relatedEntityId: secretId
+      });
+      await connection.commit();
+      return res.json({ ok: true, secretId, graceHours: graceHours ?? 24 });
+    } catch (error) {
+      await connection.rollback();
+      console.error("Rotate JWT secret error", error);
+      return res.status(500).json({ ok: false, message: "Failed to rotate JWT secret." });
+    } finally {
+      connection.release();
+    }
+  }
+);
 
 // HTTP proxy that forwards /api/* calls to the business API service.
 const apiProxy = createProxyMiddleware({
@@ -676,6 +951,11 @@ server.on("upgrade", (req, socket, head) => {
 
 const start = async () => {
   await initDatabase();
+  try {
+    await seedRbac();
+  } catch (error) {
+    console.warn("RBAC seed skipped", error);
+  }
   try {
     await initRedis();
   } catch (error) {

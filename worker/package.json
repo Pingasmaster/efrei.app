@@ -12,6 +12,7 @@
     "start": "node index.js"
   },
   "dependencies": {
+    "mysql2": "^3.16.0",
     "redis": "^5.10.0"
   }
 }
