@@ -8,7 +8,7 @@ COPY api/package.json ./
 # Install production dependencies only.
 RUN npm install --omit=dev
 
-COPY api/index.js ./
+COPY api/ ./
 
 EXPOSE 4000
 # Run the API entrypoint.

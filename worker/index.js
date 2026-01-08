@@ -1,6 +1,9 @@
 // Worker service: publishes odds and processes payout jobs.
+const http = require("http");
 const mysql = require("mysql2/promise");
 const { createClient } = require("redis");
+const pino = require("pino");
+const promClient = require("prom-client");
 
 // Runtime configuration for Redis connection and publish cadence.
 const redisHost = process.env.REDIS_HOST || "redis";
@@ -9,6 +12,22 @@ const oddsChannel = process.env.ODDS_CHANNEL || "odds_updates";
 const intervalMs = Number(process.env.ODDS_INTERVAL_MS || 2500);
 const payoutQueueName = process.env.PAYOUT_QUEUE || "payout_jobs";
 const payoutPollIntervalMs = Number(process.env.PAYOUT_POLL_INTERVAL_MS || 5000);
+const payoutMaxAttemptsRaw = Number(process.env.PAYOUT_MAX_ATTEMPTS || 5);
+const payoutMaxAttempts = Number.isFinite(payoutMaxAttemptsRaw) && payoutMaxAttemptsRaw > 0
+  ? payoutMaxAttemptsRaw
+  : 5;
+const payoutBackoffBaseMsRaw = Number(process.env.PAYOUT_BACKOFF_BASE_MS || 10000);
+const payoutBackoffBaseMs = Number.isFinite(payoutBackoffBaseMsRaw) && payoutBackoffBaseMsRaw > 0
+  ? payoutBackoffBaseMsRaw
+  : 10000;
+const payoutBackoffMaxMsRaw = Number(process.env.PAYOUT_BACKOFF_MAX_MS || 5 * 60 * 1000);
+const payoutBackoffMaxMs = Number.isFinite(payoutBackoffMaxMsRaw) && payoutBackoffMaxMsRaw > 0
+  ? payoutBackoffMaxMsRaw
+  : 5 * 60 * 1000;
+const payoutDelayedSetName = process.env.PAYOUT_DELAYED_SET || "payout_jobs_delayed";
+const payoutDeadLetterQueueName = process.env.PAYOUT_DEAD_LETTER_QUEUE || "payout_jobs_dead";
+const metricsPort = Number(process.env.METRICS_PORT || 9102);
+const logLevel = process.env.LOG_LEVEL || "info";
 
 // MySQL configuration.
 const dbHost = process.env.DB_HOST || "mysql";
@@ -19,8 +38,89 @@ const dbPassword = process.env.DB_PASSWORD || "efrei";
 
 let dbPool = null;
 let superAdminIdCache = null;
+let redisQueueClient = null;
+
+const logger = pino({
+  level: logLevel,
+  base: { service: "worker" },
+  timestamp: pino.stdTimeFunctions.isoTime
+});
+
+const metricsRegistry = new promClient.Registry();
+promClient.collectDefaultMetrics({ register: metricsRegistry, prefix: "worker_" });
+
+const payoutJobsTotal = new promClient.Counter({
+  name: "worker_payout_jobs_total",
+  help: "Total payout jobs processed",
+  labelNames: ["status"],
+  registers: [metricsRegistry]
+});
+
+const payoutJobAttemptsTotal = new promClient.Counter({
+  name: "worker_payout_job_attempts_total",
+  help: "Total payout job attempts",
+  labelNames: ["status"],
+  registers: [metricsRegistry]
+});
+
+const payoutJobDuration = new promClient.Histogram({
+  name: "worker_payout_job_duration_seconds",
+  help: "Payout job duration in seconds",
+  labelNames: ["status"],
+  registers: [metricsRegistry]
+});
+
+const payoutQueueDepth = new promClient.Gauge({
+  name: "worker_payout_queue_depth",
+  help: "Current payout queue depth",
+  registers: [metricsRegistry]
+});
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const calculateBackoffMs = (attempt) => {
+  const exponent = Math.max(0, Number(attempt) - 1);
+  const baseDelay = Math.min(payoutBackoffBaseMs * 2 ** exponent, payoutBackoffMaxMs);
+  const jitter = Math.floor(baseDelay * (Math.random() * 0.2));
+  return baseDelay + jitter;
+};
+
+const scheduleDelayedRetry = async (jobId, nextAttemptAtMs) => {
+  if (!redisQueueClient) {
+    return;
+  }
+  await redisQueueClient.zAdd(payoutDelayedSetName, {
+    score: Number(nextAttemptAtMs),
+    value: String(jobId)
+  });
+};
+
+const moveDueDelayedJobs = async () => {
+  if (!redisQueueClient) {
+    return;
+  }
+  const now = Date.now();
+  const due = await redisQueueClient.zRangeByScore(payoutDelayedSetName, 0, now, { LIMIT: { offset: 0, count: 50 } });
+  if (!due.length) {
+    return;
+  }
+  const ids = due.map((value) => Number(value)).filter((value) => Number.isFinite(value) && value > 0);
+  if (!ids.length) {
+    return;
+  }
+  const batch = redisQueueClient.multi();
+  due.forEach((value) => {
+    batch.zRem(payoutDelayedSetName, value);
+    batch.lPush(payoutQueueName, value);
+  });
+  await batch.exec();
+  await dbPool.query(
+    `UPDATE payout_jobs
+     SET status = 'queued', next_attempt_at = NULL, updated_at = NOW()
+     WHERE id IN (${ids.map(() => "?").join(",")})`,
+    ids
+  );
+};
 
 // Static sample matches used to fabricate odds for the demo.
 const matches = [
@@ -200,15 +300,59 @@ const creditFeeToSuperAdmin = async (connection, feePoints, context = {}) => {
   });
 };
 
-const markJobFailed = async (connection, jobId, message) => {
+const markJobFailed = async (connection, jobId, message, attempt = 1, maxAttempts = payoutMaxAttempts) => {
+  const errorMessage = message || "Unknown error";
+  const safeAttempt = Number.isFinite(attempt) && attempt > 0 ? attempt : 1;
+  const safeMax = Number.isFinite(maxAttempts) && maxAttempts > 0 ? maxAttempts : payoutMaxAttempts;
+  if (safeAttempt >= safeMax) {
+    await connection.query(
+      `UPDATE payout_jobs
+       SET status = 'dead',
+           error_message = ?,
+           last_error_at = NOW(),
+           dead_at = NOW(),
+           updated_at = NOW()
+       WHERE id = ?`,
+      [errorMessage, jobId]
+    );
+    payoutJobsTotal.inc({ status: "dead" });
+    payoutJobAttemptsTotal.inc({ status: "failed" });
+    if (redisQueueClient) {
+      await redisQueueClient.lPush(payoutDeadLetterQueueName, String(jobId));
+    }
+    logger.error({ jobId, attempt: safeAttempt, maxAttempts: safeMax, error: errorMessage }, "Payout job dead");
+    return { status: "dead" };
+  }
+  const delayMs = calculateBackoffMs(safeAttempt);
+  const nextAttemptAt = new Date(Date.now() + delayMs);
   await connection.query(
-    "UPDATE payout_jobs SET status = 'failed', error_message = ?, updated_at = NOW() WHERE id = ?",
-    [message, jobId]
+    `UPDATE payout_jobs
+     SET status = 'retry_wait',
+         error_message = ?,
+         last_error_at = NOW(),
+         next_attempt_at = ?,
+         updated_at = NOW()
+     WHERE id = ?`,
+    [errorMessage, nextAttemptAt, jobId]
   );
+  payoutJobsTotal.inc({ status: "retry_wait" });
+  payoutJobAttemptsTotal.inc({ status: "failed" });
+  await scheduleDelayedRetry(jobId, nextAttemptAt.getTime());
+  logger.warn({
+    jobId,
+    attempt: safeAttempt,
+    maxAttempts: safeMax,
+    nextAttemptAt: nextAttemptAt.toISOString(),
+    error: errorMessage
+  }, "Payout job retry scheduled");
+  return { status: "retry_wait", nextAttemptAt };
 };
 
 const processPayoutJob = async (jobId) => {
   const connection = await dbPool.getConnection();
+  const startedAt = process.hrtime.bigint();
+  let attempt = 0;
+  let maxAttempts = payoutMaxAttempts;
   try {
     await connection.beginTransaction();
     const [jobRows] = await connection.query("SELECT * FROM payout_jobs WHERE id = ? FOR UPDATE", [jobId]);
@@ -217,36 +361,43 @@ const processPayoutJob = async (jobId) => {
       return;
     }
     const job = jobRows[0];
-    if (job.status === "completed") {
+    maxAttempts = Number(job.max_attempts || payoutMaxAttempts);
+    if (job.status === "completed" || job.status === "dead") {
       await connection.rollback();
       return;
     }
     if (job.status === "processing" && job.started_at) {
-      const startedAt = new Date(job.started_at).getTime();
-      if (Number.isFinite(startedAt) && Date.now() - startedAt < 15 * 60 * 1000) {
+      const runningForMs = Date.now() - new Date(job.started_at).getTime();
+      if (Number.isFinite(runningForMs) && runningForMs < 15 * 60 * 1000) {
         await connection.rollback();
         return;
       }
     }
+    if (job.next_attempt_at) {
+      const nextAttemptAt = new Date(job.next_attempt_at).getTime();
+      if (Number.isFinite(nextAttemptAt) && nextAttemptAt > Date.now()) {
+        await connection.rollback();
+        await scheduleDelayedRetry(jobId, nextAttemptAt);
+        return;
+      }
+    }
 
+    attempt = Number(job.attempts || 0) + 1;
     await connection.query(
-      "UPDATE payout_jobs SET status = 'processing', started_at = NOW(), attempts = attempts + 1, error_message = NULL WHERE id = ?",
-      [jobId]
+      "UPDATE payout_jobs SET status = 'processing', started_at = NOW(), attempts = ?, error_message = NULL WHERE id = ?",
+      [attempt, jobId]
     );
+    payoutJobAttemptsTotal.inc({ status: "started" });
 
     const betId = Number(job.bet_id);
     const resultOptionId = Number(job.result_option_id || 0);
     if (!betId || !resultOptionId) {
-      await markJobFailed(connection, jobId, "Missing bet_id or result_option_id");
-      await connection.commit();
-      return;
+      throw new Error("Missing bet_id or result_option_id");
     }
 
     const [betRows] = await connection.query("SELECT * FROM bets WHERE id = ? FOR UPDATE", [betId]);
     if (!betRows.length) {
-      await markJobFailed(connection, jobId, "Bet not found");
-      await connection.commit();
-      return;
+      throw new Error("Bet not found");
     }
     const bet = betRows[0];
     if (bet.status === "resolved" && bet.resolved_at) {
@@ -255,6 +406,10 @@ const processPayoutJob = async (jobId) => {
         [jobId]
       );
       await connection.commit();
+      const durationSec = Number(process.hrtime.bigint() - startedAt) / 1e9;
+      payoutJobsTotal.inc({ status: "completed" });
+      payoutJobDuration.observe({ status: "completed" }, durationSec);
+      payoutJobAttemptsTotal.inc({ status: "success" });
       return;
     }
 
@@ -263,9 +418,7 @@ const processPayoutJob = async (jobId) => {
       [resultOptionId, betId]
     );
     if (!optionRows.length) {
-      await markJobFailed(connection, jobId, "Result option not found");
-      await connection.commit();
-      return;
+      throw new Error("Result option not found");
     }
 
     const [positions] = await connection.query(
@@ -334,17 +487,21 @@ const processPayoutJob = async (jobId) => {
     );
 
     await connection.commit();
+    const durationSec = Number(process.hrtime.bigint() - startedAt) / 1e9;
+    payoutJobsTotal.inc({ status: "completed" });
+    payoutJobDuration.observe({ status: "completed" }, durationSec);
+    payoutJobAttemptsTotal.inc({ status: "success" });
+    logger.info({ jobId, betId, resultOptionId, totalFees, attempt }, "Payout job completed");
   } catch (error) {
     await connection.rollback();
     try {
-      await connection.query(
-        "UPDATE payout_jobs SET status = 'failed', error_message = ?, updated_at = NOW() WHERE id = ?",
-        [error?.message || "Unknown error", jobId]
-      );
+      await markJobFailed(connection, jobId, error?.message || "Unknown error", attempt || 1, maxAttempts);
     } catch (updateError) {
-      console.error("Failed to mark payout job failed", updateError);
+      logger.error({ err: updateError }, "Failed to mark payout job failed");
     }
-    console.error("Payout job error", error);
+    const durationSec = Number(process.hrtime.bigint() - startedAt) / 1e9;
+    payoutJobDuration.observe({ status: "failed" }, durationSec);
+    logger.error({ jobId, attempt, maxAttempts, err: error }, "Payout job error");
   } finally {
     connection.release();
   }
@@ -352,7 +509,13 @@ const processPayoutJob = async (jobId) => {
 
 const pollQueuedJobs = async () => {
   const [rows] = await dbPool.query(
-    "SELECT id FROM payout_jobs WHERE status IN ('queued', 'failed') ORDER BY created_at ASC LIMIT 10"
+    `SELECT id
+     FROM payout_jobs
+     WHERE status IN ('queued', 'failed')
+        OR (status = 'retry_wait' AND (next_attempt_at IS NULL OR next_attempt_at <= NOW()))
+        OR (status = 'processing' AND started_at IS NOT NULL AND started_at < (NOW() - INTERVAL 15 MINUTE))
+     ORDER BY created_at ASC
+     LIMIT 10`
   );
   for (const row of rows) {
     await processPayoutJob(Number(row.id));
@@ -370,7 +533,7 @@ const listenToQueue = async (queueClient) => {
         }
       }
     } catch (error) {
-      console.error("Queue listener error", error);
+      logger.error({ err: error }, "Queue listener error");
       await sleep(1000);
     }
   }
@@ -399,10 +562,25 @@ const initDatabase = async () => {
       if (attempt === maxAttempts) {
         throw error;
       }
-      console.warn(`MySQL not ready (attempt ${attempt}/${maxAttempts}), retrying...`);
+      logger.warn({ attempt, maxAttempts }, "MySQL not ready, retrying");
       await sleep(2000);
     }
   }
+};
+
+const startMetricsServer = () => {
+  const server = http.createServer(async (req, res) => {
+    if (req.url === "/metrics") {
+      res.writeHead(200, { "Content-Type": metricsRegistry.contentType });
+      res.end(await metricsRegistry.metrics());
+      return;
+    }
+    res.writeHead(404, { "Content-Type": "text/plain" });
+    res.end("Not found");
+  });
+  server.listen(metricsPort, () => {
+    logger.info({ metricsPort }, "Worker metrics listening");
+  });
 };
 
 // Connect to Redis, publish once, then publish on an interval.
@@ -410,12 +588,23 @@ const start = async () => {
   await initDatabase();
 
   const client = createClient({ url: `redis://${redisHost}:${redisPort}` });
-  client.on("error", (err) => console.error("Redis error", err));
+  client.on("error", (err) => logger.error({ err }, "Redis error"));
   await client.connect();
 
   const queueClient = client.duplicate();
-  queueClient.on("error", (err) => console.error("Redis queue error", err));
+  queueClient.on("error", (err) => logger.error({ err }, "Redis queue error"));
   await queueClient.connect();
+  redisQueueClient = queueClient;
+
+  const updateQueueDepth = async () => {
+    try {
+      const depth = await queueClient.lLen(payoutQueueName);
+      payoutQueueDepth.set(Number(depth || 0));
+    } catch (error) {
+      logger.warn({ err: error }, "Failed to read payout queue depth");
+    }
+  };
+  await updateQueueDepth();
 
   // Compose and publish the odds message to the channel.
   const publish = async () => {
@@ -431,23 +620,33 @@ const start = async () => {
   await publish();
   // Continue publishing at the configured interval.
   setInterval(() => {
-    publish().catch((error) => console.error("Publish error", error));
+    publish().catch((error) => logger.error({ err: error }, "Publish error"));
   }, intervalMs);
 
   // Start payout job queue listener.
-  listenToQueue(queueClient).catch((error) => console.error("Queue listener stopped", error));
+  listenToQueue(queueClient).catch((error) => logger.error({ err: error }, "Queue listener stopped"));
 
   // Fallback polling in case the queue is empty or Redis is down.
   setInterval(() => {
-    pollQueuedJobs().catch((error) => console.error("Payout poll error", error));
+    pollQueuedJobs().catch((error) => logger.error({ err: error }, "Payout poll error"));
   }, payoutPollIntervalMs);
 
-  console.log(`Odds worker publishing to ${oddsChannel} every ${intervalMs}ms`);
-  console.log(`Payout worker listening on ${payoutQueueName}`);
+  // Move delayed retries back into the main queue.
+  setInterval(() => {
+    moveDueDelayedJobs().catch((error) => logger.error({ err: error }, "Delayed retry move failed"));
+  }, 1000);
+
+  setInterval(() => {
+    updateQueueDepth().catch((error) => logger.error({ err: error }, "Queue depth update failed"));
+  }, Math.max(1000, Math.floor(payoutPollIntervalMs / 2)));
+
+  startMetricsServer();
+  logger.info({ oddsChannel, intervalMs }, "Odds worker started");
+  logger.info({ payoutQueueName }, "Payout worker listening");
 };
 
 // Bootstrap the worker and exit on fatal failure.
 start().catch((error) => {
-  console.error("Worker failed to start", error);
+  logger.error({ err: error }, "Worker failed to start");
   process.exit(1);
 });

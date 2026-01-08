@@ -8,7 +8,7 @@ COPY worker/package.json ./
 # Install production dependencies only.
 RUN npm install --omit=dev
 
-COPY worker/index.js ./
+COPY worker/ ./
 
 # Worker does not expose HTTP ports; it runs a background process.
 CMD ["npm", "start"]

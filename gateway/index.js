@@ -10,12 +10,15 @@ const { z } = require("zod");
 const mysql = require("mysql2/promise");
 const { createClient: createRedisClient } = require("redis");
 const { createProxyMiddleware } = require("http-proxy-middleware");
+const pino = require("pino");
+const promClient = require("prom-client");
 
 const app = express();
 // Runtime configuration (defaults match docker-compose service names/ports).
 const port = process.env.PORT || 3000;
 const jwtSecret = process.env.JWT_SECRET || "dev-secret";
 const businessApiUrl = process.env.BUSINESS_API_URL || "http://api:4000";
+const logLevel = process.env.LOG_LEVEL || "info";
 
 // MySQL configuration (consumed from .env / docker-compose).
 const dbHost = process.env.DB_HOST || "mysql";
@@ -42,6 +45,36 @@ const authCacheTtlSeconds =
 let dbPool = null;
 let redisClient = null;
 let jwtSecretsCache = { secrets: null, primary: null, fetchedAt: 0 };
+
+const logger = pino({
+  level: logLevel,
+  base: { service: "gateway" },
+  timestamp: pino.stdTimeFunctions.isoTime
+});
+
+const metricsRegistry = new promClient.Registry();
+promClient.collectDefaultMetrics({ register: metricsRegistry, prefix: "gateway_" });
+
+const httpRequestDuration = new promClient.Histogram({
+  name: "gateway_http_request_duration_seconds",
+  help: "HTTP request duration in seconds",
+  labelNames: ["method", "route", "status"],
+  registers: [metricsRegistry]
+});
+
+const httpRequestsTotal = new promClient.Counter({
+  name: "gateway_http_requests_total",
+  help: "Total HTTP requests",
+  labelNames: ["method", "route", "status"],
+  registers: [metricsRegistry]
+});
+
+const authRequestsTotal = new promClient.Counter({
+  name: "gateway_auth_requests_total",
+  help: "Total auth requests",
+  labelNames: ["action", "status"],
+  registers: [metricsRegistry]
+});
 
 const rateLimit = typeof rateLimitModule === "function" ? rateLimitModule : rateLimitModule.rateLimit;
 
@@ -116,6 +149,35 @@ const authLimiter = createBackoffLimiter({
 // Allow browser clients and parse JSON request bodies.
 app.use(cors());
 app.use(express.json());
+app.use((req, res, next) => {
+  const incomingId = req.headers["x-request-id"];
+  const requestId =
+    typeof incomingId === "string" && incomingId.trim()
+      ? incomingId.trim()
+      : crypto.randomUUID();
+  req.requestId = requestId;
+  res.setHeader("X-Request-Id", requestId);
+  req.log = logger.child({ requestId });
+  const startedAt = process.hrtime.bigint();
+  res.on("finish", () => {
+    const durationMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+    const route = req.route?.path ? `${req.baseUrl || ""}${req.route.path}` : req.path;
+    const status = String(res.statusCode || 0);
+    const method = req.method;
+    httpRequestsTotal.inc({ method, route, status });
+    httpRequestDuration.observe({ method, route, status }, durationMs / 1000);
+    logger.info({
+      requestId,
+      method,
+      route,
+      status: res.statusCode,
+      durationMs: Number(durationMs.toFixed(2)),
+      userId: req.user?.id || null,
+      ip: req.ip
+    }, "http_request");
+  });
+  next();
+});
 app.use(generalLimiter);
 
 // Basic health endpoint used by probes.
@@ -123,7 +185,16 @@ app.get("/health", (req, res) => {
   res.json({ status: "ok", service: "gateway" });
 });
 
+app.get("/metrics", async (req, res) => {
+  res.setHeader("Content-Type", metricsRegistry.contentType);
+  res.send(await metricsRegistry.metrics());
+});
+
 const normalizeEmail = (email) => String(email || "").trim().toLowerCase();
+
+const recordAuthMetric = (action, status) => {
+  authRequestsTotal.inc({ action, status });
+};
 
 const parsePositiveInt = (value) => {
   const numberValue = Number(value);
@@ -341,13 +412,26 @@ const upsertUserDevice = async (connection, userId, req) => {
   const fingerprint = getDeviceFingerprint(req);
   const userAgent = req.headers["user-agent"] || null;
   const ip = getClientIp(req) || null;
+  const [existingRows] = await connection.query(
+    "SELECT id, revoked_at AS revokedAt FROM user_devices WHERE user_id = ? AND fingerprint = ? LIMIT 1",
+    [userId, fingerprint]
+  );
+  if (existingRows.length && existingRows[0].revokedAt) {
+    return {
+      fingerprint,
+      isNewDevice: false,
+      deviceId: Number(existingRows[0].id),
+      isRevoked: true
+    };
+  }
   const [result] = await connection.query(
     `INSERT INTO user_devices (user_id, fingerprint, user_agent, last_ip)
      VALUES (?, ?, ?, ?)
-     ON DUPLICATE KEY UPDATE last_ip = VALUES(last_ip), user_agent = VALUES(user_agent), last_seen = CURRENT_TIMESTAMP`,
+     ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id), last_ip = VALUES(last_ip), user_agent = VALUES(user_agent), last_seen = CURRENT_TIMESTAMP`,
     [userId, fingerprint, userAgent, ip]
   );
   const isNewDevice = result.affectedRows === 1;
+  const deviceId = Number(result.insertId);
   if (isNewDevice) {
     await logAudit(connection, {
       actorUserId: userId,
@@ -355,11 +439,11 @@ const upsertUserDevice = async (connection, userId, req) => {
       action: "auth_new_device",
       reason: "new_device",
       relatedEntityType: "user_device",
-      relatedEntityId: null,
+      relatedEntityId: deviceId || null,
       metadata: { fingerprint, ip, userAgent }
     });
   }
-  return { fingerprint, isNewDevice };
+  return { fingerprint, isNewDevice, deviceId, isRevoked: false };
 };
 
 const loadJwtSecrets = async () => {
@@ -390,7 +474,7 @@ const getJwtSecrets = async () => {
       return { secrets, primary: primary || secrets[0] };
     }
   } catch (error) {
-    console.error("JWT secret lookup failed", error);
+    logger.error({ err: error }, "JWT secret lookup failed");
   }
   return { secrets: [jwtSecret], primary: jwtSecret };
 };
@@ -418,20 +502,20 @@ const hashToken = (token) =>
 const generateRefreshToken = () =>
   crypto.randomBytes(32).toString("base64url");
 
-const issueRefreshToken = async (connection, userId) => {
+const issueRefreshToken = async (connection, userId, deviceId = null) => {
   const refreshToken = generateRefreshToken();
   const tokenHash = hashToken(refreshToken);
   const expiresAt = new Date(Date.now() + refreshTokenDays * 24 * 60 * 60 * 1000);
   await connection.query(
-    "INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES (?, ?, ?)",
-    [userId, tokenHash, expiresAt]
+    "INSERT INTO refresh_tokens (user_id, device_id, token_hash, expires_at) VALUES (?, ?, ?, ?)",
+    [userId, deviceId, tokenHash, expiresAt]
   );
   return refreshToken;
 };
 
 const rotateRefreshToken = async (connection, tokenHash) => {
   const [rows] = await connection.query(
-    "SELECT id, user_id AS userId, expires_at AS expiresAt, revoked_at AS revokedAt FROM refresh_tokens WHERE token_hash = ? FOR UPDATE",
+    "SELECT id, user_id AS userId, device_id AS deviceId, expires_at AS expiresAt, revoked_at AS revokedAt FROM refresh_tokens WHERE token_hash = ? FOR UPDATE",
     [tokenHash]
   );
   if (!rows.length) {
@@ -444,8 +528,8 @@ const rotateRefreshToken = async (connection, tokenHash) => {
   await connection.query("UPDATE refresh_tokens SET revoked_at = NOW(), last_used_at = NOW() WHERE id = ?", [
     record.id
   ]);
-  const newToken = await issueRefreshToken(connection, record.userId);
-  return { userId: record.userId, refreshToken: newToken };
+  const newToken = await issueRefreshToken(connection, record.userId, record.deviceId || null);
+  return { userId: record.userId, refreshToken: newToken, deviceId: record.deviceId || null };
 };
 
 const rotateJwtSecret = async (connection, newSecret, graceHours = 24) => {
@@ -579,7 +663,7 @@ const initDatabase = async () => {
       if (attempt === maxAttempts) {
         throw error;
       }
-      console.warn(`MySQL not ready (attempt ${attempt}/${maxAttempts}), retrying...`);
+      logger.warn({ attempt, maxAttempts }, "MySQL not ready, retrying");
       await new Promise((resolve) => setTimeout(resolve, 2000));
     }
   }
@@ -589,7 +673,7 @@ const initDatabase = async () => {
 const initRedis = async () => {
   const client = createRedisClient({ url: `redis://${redisHost}:${redisPort}` });
   client.on("error", (err) => {
-    console.error("Redis error", err);
+    logger.error({ err }, "Redis error");
   });
   await client.connect();
   redisClient = client;
@@ -617,12 +701,15 @@ app.post(
       const normalizedEmail = normalizeEmail(email);
       const trimmedName = String(name || "").trim();
       if (!trimmedName || !normalizedEmail || !password) {
+        recordAuthMetric("register", "error");
         return res.status(400).json({ ok: false, message: "Name, email, and password are required." });
       }
       if (!isEmailValid(normalizedEmail)) {
+        recordAuthMetric("register", "error");
         return res.status(400).json({ ok: false, message: "Invalid email format." });
       }
       if (String(password).length < 6) {
+        recordAuthMetric("register", "error");
         return res.status(400).json({ ok: false, message: "Password must be at least 6 characters." });
       }
 
@@ -630,6 +717,7 @@ app.post(
       const [existing] = await connection.query("SELECT id FROM users WHERE email = ?", [normalizedEmail]);
       if (existing.length > 0) {
         await connection.rollback();
+        recordAuthMetric("register", "error");
         return res.status(409).json({ ok: false, message: "Email already registered." });
       }
 
@@ -659,7 +747,7 @@ app.post(
             await ensureUserRole(result.insertId, superRoleId, result.insertId);
           }
         } catch (rbacError) {
-          console.warn("RBAC assignment skipped", rbacError);
+          logger.warn({ err: rbacError }, "RBAC assignment skipped");
         }
       }
 
@@ -673,8 +761,15 @@ app.post(
       };
       const user = await enrichUser(baseUser);
 
+      const deviceInfo = await upsertUserDevice(connection, user.id, req);
+      if (deviceInfo.isRevoked) {
+        await connection.rollback();
+        recordAuthMetric("register", "error");
+        logger.warn({ userId: user.id, deviceId: deviceInfo.deviceId }, "register_blocked_device_revoked");
+        return res.status(403).json({ ok: false, message: "Device access revoked." });
+      }
       const token = await signJwt({ sub: String(user.id), email: user.email });
-      const refreshToken = await issueRefreshToken(connection, user.id);
+      const refreshToken = await issueRefreshToken(connection, user.id, deviceInfo.deviceId || null);
       await logAudit(connection, {
         actorUserId: user.id,
         targetUserId: user.id,
@@ -689,11 +784,17 @@ app.post(
         pointsBefore: 0,
         pointsAfter: startingPoints
       });
-      const deviceInfo = await upsertUserDevice(connection, user.id, req);
 
       await connection.commit();
       await setCachedUser(user);
 
+      recordAuthMetric("register", "success");
+      logger.info({
+        userId: user.id,
+        email: user.email,
+        newDevice: deviceInfo.isNewDevice,
+        deviceId: deviceInfo.deviceId || null
+      }, "auth_register");
       return res.status(201).json({
         ok: true,
         user: toPublicUser(user),
@@ -704,9 +805,11 @@ app.post(
     } catch (error) {
       await connection.rollback();
       if (error && error.code === "ER_DUP_ENTRY") {
+        recordAuthMetric("register", "error");
         return res.status(409).json({ ok: false, message: "Email already registered." });
       }
-      console.error("Register error", error);
+      recordAuthMetric("register", "error");
+      logger.error({ err: error }, "Register error");
       return res.status(500).json({ ok: false, message: "Registration failed." });
     } finally {
       connection.release();
@@ -734,6 +837,7 @@ app.post(
       const { email, password } = req.body || {};
       const normalizedEmail = normalizeEmail(email);
       if (!normalizedEmail || !password) {
+        recordAuthMetric("login", "error");
         return res.status(400).json({ ok: false, message: "Email and password are required." });
       }
 
@@ -742,6 +846,7 @@ app.post(
         [normalizedEmail]
       );
       if (!rows.length) {
+        recordAuthMetric("login", "error");
         return res.status(401).json({ ok: false, message: "Invalid credentials." });
       }
       const baseUser = {
@@ -755,32 +860,48 @@ app.post(
       const user = await enrichUser(baseUser);
 
       if (user.isBanned) {
+        recordAuthMetric("login", "error");
         return res.status(403).json({ ok: false, message: "User is banned." });
       }
 
       const matches = await bcrypt.compare(password, user.passwordHash);
       if (!matches) {
+        recordAuthMetric("login", "error");
         return res.status(401).json({ ok: false, message: "Invalid credentials." });
       }
 
       await connection.beginTransaction();
+      const deviceInfo = await upsertUserDevice(connection, user.id, req);
+      if (deviceInfo.isRevoked) {
+        await connection.rollback();
+        recordAuthMetric("login", "error");
+        logger.warn({ userId: user.id, deviceId: deviceInfo.deviceId }, "login_blocked_device_revoked");
+        return res.status(403).json({ ok: false, message: "Device access revoked." });
+      }
       const token = await signJwt({ sub: String(user.id), email: user.email });
-      const refreshToken = await issueRefreshToken(connection, user.id);
+      const refreshToken = await issueRefreshToken(connection, user.id, deviceInfo.deviceId || null);
       await logAudit(connection, {
         actorUserId: user.id,
         targetUserId: user.id,
         action: "auth_login",
         reason: "auth_login"
       });
-      const deviceInfo = await upsertUserDevice(connection, user.id, req);
       await connection.commit();
 
       await setCachedUser(user);
 
+      recordAuthMetric("login", "success");
+      logger.info({
+        userId: user.id,
+        email: user.email,
+        newDevice: deviceInfo.isNewDevice,
+        deviceId: deviceInfo.deviceId || null
+      }, "auth_login");
       return res.json({ ok: true, user: toPublicUser(user), token, refreshToken, newDevice: deviceInfo.isNewDevice });
     } catch (error) {
       await connection.rollback();
-      console.error("Login error", error);
+      recordAuthMetric("login", "error");
+      logger.error({ err: error }, "Login error");
       return res.status(500).json({ ok: false, message: "Login failed." });
     } finally {
       connection.release();
@@ -801,6 +922,7 @@ app.post(
   async (req, res) => {
     const { refreshToken } = req.body || {};
     if (!refreshToken) {
+      recordAuthMetric("refresh", "error");
       return res.status(400).json({ ok: false, message: "refreshToken is required." });
     }
     const tokenHash = hashToken(refreshToken);
@@ -810,6 +932,7 @@ app.post(
       const rotated = await rotateRefreshToken(connection, tokenHash);
       if (!rotated) {
         await connection.rollback();
+        recordAuthMetric("refresh", "error");
         return res.status(401).json({ ok: false, message: "Invalid refresh token." });
       }
       const [userRows] = await connection.query(
@@ -818,6 +941,7 @@ app.post(
       );
       if (!userRows.length) {
         await connection.rollback();
+        recordAuthMetric("refresh", "error");
         return res.status(401).json({ ok: false, message: "User not found." });
       }
       const baseUser = {
@@ -830,6 +954,7 @@ app.post(
       const user = await enrichUser(baseUser);
       if (user.isBanned) {
         await connection.rollback();
+        recordAuthMetric("refresh", "error");
         return res.status(403).json({ ok: false, message: "User is banned." });
       }
       const token = await signJwt({ sub: String(user.id), email: user.email });
@@ -840,10 +965,13 @@ app.post(
         reason: "auth_refresh"
       });
       await connection.commit();
+      recordAuthMetric("refresh", "success");
+      logger.info({ userId: user.id, deviceId: rotated.deviceId || null }, "auth_refresh");
       return res.json({ ok: true, user: toPublicUser(user), token, refreshToken: rotated.refreshToken });
     } catch (error) {
       await connection.rollback();
-      console.error("Refresh error", error);
+      recordAuthMetric("refresh", "error");
+      logger.error({ err: error }, "Refresh error");
       return res.status(500).json({ ok: false, message: "Refresh failed." });
     } finally {
       connection.release();
@@ -874,9 +1002,12 @@ app.post(
         action: "auth_logout",
         reason: "auth_logout"
       });
+      recordAuthMetric("logout", "success");
+      logger.info({ userId: req.user.id }, "auth_logout");
       return res.json({ ok: true });
     } catch (error) {
-      console.error("Logout error", error);
+      recordAuthMetric("logout", "error");
+      logger.error({ err: error }, "Logout error");
       return res.status(500).json({ ok: false, message: "Logout failed." });
     }
   }
@@ -915,7 +1046,7 @@ app.post(
       return res.json({ ok: true, secretId, graceHours: graceHours ?? 24 });
     } catch (error) {
       await connection.rollback();
-      console.error("Rotate JWT secret error", error);
+      logger.error({ err: error }, "Rotate JWT secret error");
       return res.status(500).json({ ok: false, message: "Failed to rotate JWT secret." });
     } finally {
       connection.release();
@@ -927,14 +1058,24 @@ app.post(
 const apiProxy = createProxyMiddleware({
   target: businessApiUrl,
   changeOrigin: true,
-  pathRewrite: { "^/api": "" }
+  pathRewrite: { "^/api": "" },
+  onProxyReq: (proxyReq, req) => {
+    if (req.requestId) {
+      proxyReq.setHeader("X-Request-Id", req.requestId);
+    }
+  }
 });
 
 // WS proxy for realtime odds (and any other WS endpoints under /ws).
 const wsProxy = createProxyMiddleware({
   target: businessApiUrl,
   changeOrigin: true,
-  ws: true
+  ws: true,
+  onProxyReqWs: (proxyReq, req) => {
+    if (req.requestId) {
+      proxyReq.setHeader("X-Request-Id", req.requestId);
+    }
+  }
 });
 
 // Route prefixes for HTTP and WebSocket traffic.
@@ -954,22 +1095,22 @@ const start = async () => {
   try {
     await seedRbac();
   } catch (error) {
-    console.warn("RBAC seed skipped", error);
+    logger.warn({ err: error }, "RBAC seed skipped");
   }
   try {
     await initRedis();
   } catch (error) {
-    console.error("Redis unavailable, continuing without cache", error);
+    logger.error({ err: error }, "Redis unavailable, continuing without cache");
     redisClient = null;
   }
 
   // Start listening for gateway requests.
   server.listen(port, () => {
-    console.log(`Gateway listening on ${port}`);
+    logger.info({ port }, "Gateway listening");
   });
 };
 
 start().catch((error) => {
-  console.error("Gateway failed to start", error);
+  logger.error({ err: error }, "Gateway failed to start");
   process.exit(1);
 });

@@ -13,15 +13,40 @@ Ce document décrit l’état actuel de l’application côté **backend / infra
 
 ## 1) Architecture & services (Docker)
 
-Services principaux :
-- **frontend** (Nginx) : sert les fichiers statiques. (Frontend non documenté ici.)
-- **gateway** (Express) : Authentification + proxy `/api` et `/ws` vers l’API métier.
-- **api** (Express) : logique métier (offres, paris, points, admin, logs). Utilise MySQL + Redis.
-- **mysql** : persistance des données.
+Services principaux (conteneurs Docker) :
+- **env-check** : job one-shot qui valide `.env` (ports, secrets, URLs). Si une valeur requise manque ou est encore en valeur par défaut, le stack ne démarre pas.
+- **frontend** (Nginx) : sert les fichiers statiques (SPA + service worker) depuis `www/`. Aucune logique métier, uniquement du contenu HTTP.
+- **gateway** (Express) :
+  - Authentification (`/auth/*`) avec JWT + refresh tokens.
+  - Détection d’appareils (empreinte) et stockage dans `user_devices`.
+  - Proxy HTTP `/api/*` et WebSocket `/ws/*` vers l’API métier.
+  - Cache auth via Redis (si disponible) et RBAC (permissions).
+  - Expose `/health` et `/metrics` (Prometheus).
+  - Émet des logs JSON structurés (Pino).
+- **api** (Express) :
+  - Logique métier (offres, paris, transferts de points, admin, audit logs).
+  - OpenAPI auto-généré (`/openapi.json`) + Swagger UI (`/docs`).
+  - Idempotency keys pour les endpoints sensibles.
+  - WebSocket odds `/ws/odds` + endpoint `/odds`.
+  - Expose `/health` et `/metrics` (Prometheus).
+  - Émet des logs JSON structurés (Pino).
+  - Initialise le schéma MySQL (mode dev) via `ensureSchema`.
+- **mysql** : persistance des utilisateurs, paris, offres, tokens, audit logs, jobs de payout.
 - **redis** :
-  - Pub/sub odds (realtime) pour l’API.
-- **odds-worker** : publie les cotes dans Redis + traite la queue de payouts des paris.
-- **env-check** : valide l’environnement `.env` avant boot.
+  - Pub/Sub odds (realtime) pour l’API.
+  - Cache auth côté gateway.
+  - Queue Redis pour les payouts (`PAYOUT_QUEUE`) + retry delayed set + dead-letter queue.
+- **odds-worker** :
+  - Publie des cotes aléatoires vers Redis (`ODDS_CHANNEL`) à intervalle fixe.
+  - Consomme la queue `payout_jobs`, applique les payouts et les fees.
+  - Retry/backoff avec `PAYOUT_DELAYED_SET` + dead-letter queue `PAYOUT_DEAD_LETTER_QUEUE`.
+  - Expose `/metrics` sur `METRICS_PORT` (Prometheus) + logs JSON.
+
+Observability (optionnel, `docker-compose.observability.yml`) :
+- **prometheus** : scrape `/metrics` (gateway/api/worker), stocke les séries temporelles, alimente les alertes.
+- **alertmanager** : reçoit et distribue les alertes Prometheus (config simple par défaut).
+- **loki** : stockage des logs structurés.
+- **promtail** : collecte les logs Docker et les pousse vers Loki.
 
 Flux :
 ```
@@ -53,10 +78,16 @@ Fichier `.env.example` :
   - `ODDS_CHANNEL`, `ODDS_INTERVAL_MS`
 - **Queue payouts**
   - `PAYOUT_QUEUE`, `PAYOUT_POLL_INTERVAL_MS`
+  - `PAYOUT_MAX_ATTEMPTS`
+  - `PAYOUT_BACKOFF_BASE_MS`, `PAYOUT_BACKOFF_MAX_MS`
+  - `PAYOUT_DELAYED_SET` (ZSET des retries), `PAYOUT_DEAD_LETTER_QUEUE` (DLQ)
 - **Refresh tokens**
   - `REFRESH_TOKEN_DAYS`
 - **Auth cache (gateway)**
   - `AUTH_CACHE_TTL_SECONDS`
+- **Observability**
+  - `LOG_LEVEL` (Pino)
+  - `METRICS_PORT` (worker)
 - **Super admin bootstrap**
   - `ADMIN_BOOTSTRAP_EMAIL` ou `ADMIN_BOOTSTRAP_USER_ID`
 
@@ -87,6 +118,7 @@ RBAC fin basé sur permissions (utilisé côté API/gateway).
 ### Table `user_devices`
 - `user_id`, `fingerprint`, `user_agent`, `last_ip`
 - `first_seen`, `last_seen`
+- `revoked_at`, `revoked_by` (révocation admin d’un device)
 
 ### Table `user_groups`
 - `name`, `description`
@@ -137,13 +169,15 @@ RBAC fin basé sur permissions (utilisé côté API/gateway).
 - `secret`, `is_primary`, `expires_at`, `created_at`
 
 ### Table `refresh_tokens`
-- `user_id`, `token_hash`, `expires_at`, `revoked_at`, `last_used_at`, `created_at`
+- `user_id`, `device_id` (optionnel), `token_hash`, `expires_at`, `revoked_at`, `last_used_at`, `created_at`
 
 ### Table `payout_jobs`
 - `bet_id`, `result_option_id`, `resolved_by`
 - `payload` (JSON)
-- `status` (`queued`, `processing`, `completed`, `failed`)
-- `error_message`, `attempts`, `started_at`, `completed_at`, `created_at`, `updated_at`
+- `status` (`queued`, `processing`, `completed`, `failed`, `retry_wait`, `dead`)
+- `error_message`, `attempts`, `max_attempts`
+- `next_attempt_at`, `last_error_at`, `dead_at`
+- `started_at`, `completed_at`, `created_at`, `updated_at`
 
 ### Table `idempotency_keys`
 - `idem_key`, `user_id`, `route`, `method`, `request_hash`
@@ -168,6 +202,7 @@ Append-only (aucun endpoint de suppression).
 ### JWT + refresh
 - **Access token JWT** (gateway) : durée **1h**.
 - **Refresh token** : stocké hashé en DB, **rotated** à chaque refresh.
+- **Refresh token lié au device** : `refresh_tokens.device_id` permet d’identifier le device d’origine et de révoquer un device ou une session spécifique.
 - **Rotation de secret** : endpoint admin dédié (gateway) => ancien secret reste valide pendant une période de grâce.
 
 ### Rôles
@@ -192,6 +227,7 @@ Append-only (aucun endpoint de suppression).
 ### Détection d’appareils
 - Empreinte d’appareil (`user_devices`) à la connexion/inscription.
 - Audit `auth_new_device` si un device inédit est détecté.
+- Si un device est révoqué (`revoked_at`), le gateway bloque les logins depuis ce device.
 
 ### Profils & visibilité
 - Un profil peut être **public** ou **privé**.
@@ -234,6 +270,7 @@ Le système loggue :
 - Toutes les transactions de points (admin credit/debit, achat d’offre, cashout, gains, refunds, transfert de ban, points initiaux…)
 - Toutes les actions admin et actions métier sensibles
 - Connexion / déconnexion / refresh + **nouveaux devices**
+- Révocations admin de devices et de sessions (`admin_device_revoke`, `admin_session_revoke`)
 
 Endpoint dédié : `GET /admin/logs`
 
@@ -291,6 +328,14 @@ Endpoint dédié : `GET /admin/logs`
   - Log audit `auth_rotate_secret`
 - Restriction: **super admin**
 
+### GET `/health`
+**But :** Health check du gateway.
+- Restriction: publique
+
+### GET `/metrics`
+**But :** Expose les métriques Prometheus du gateway.
+- Restriction: publique (à limiter via réseau en prod)
+
 ### Proxy
 - `/api/*` -> API métier
 - `/ws/*` -> API WS
@@ -311,6 +356,10 @@ Toutes les routes sensibles exigent:
 #### GET `/health`
 **But :** Health check.
 - Restriction: publique
+
+#### GET `/metrics`
+**But :** Expose les métriques Prometheus de l’API.
+- Restriction: publique (à limiter via réseau en prod)
 
 #### GET `/odds`
 **But :** Dernier snapshot des cotes.
@@ -348,6 +397,30 @@ Toutes les routes sensibles exigent:
 **But :** Audit logs ciblés.
 - Query: `limit`, `offset`, `scope`, `sort`, `order`, `action`, `search`
 - Restriction: admin ou super admin
+
+#### GET `/admin/users/:id/devices`
+**But :** Lister les devices d’un utilisateur.
+- Query: `limit`, `offset`
+- Retour: `devices` avec `revoked_at`, `revoked_by` et nombre de sessions actives.
+- Restriction: admin ou super admin
+
+#### DELETE `/admin/users/:id/devices/:deviceId`
+**But :** Révoquer un device (et ses refresh tokens associés).
+- Effets: marque `user_devices.revoked_at` + révoque les refresh tokens liés.
+- Restriction: admin ou super admin (**interdit** sur super admin si admin non-super)
+- Log: `admin_device_revoke`
+
+#### GET `/admin/users/:id/sessions`
+**But :** Lister les sessions (refresh tokens) d’un utilisateur.
+- Query: `limit`, `offset`
+- Retour: `sessions` avec `device_id`, `expires_at`, `revoked_at`, `last_used_at`.
+- Restriction: admin ou super admin
+
+#### DELETE `/admin/users/:id/sessions/:sessionId`
+**But :** Révoquer une session (refresh token).
+- Effets: `revoked_at = NOW()`
+- Restriction: admin ou super admin (**interdit** sur super admin si admin non-super)
+- Log: `admin_session_revoke`
 
 #### POST `/admin/users/:id/unban`
 **But :** Débannir un user.
@@ -643,3 +716,62 @@ Toutes les routes sensibles exigent:
 - Log: `admin_fee_summary`
 
 ---
+
+## 8) Queue payouts & politique de retry
+
+- Les résolutions de paris créent un job dans `payout_jobs` (status `queued`).
+- Le worker consomme la queue Redis `PAYOUT_QUEUE` et traite les jobs.
+- En cas d’échec :
+  - Le job passe en `retry_wait`, `next_attempt_at` est fixé (backoff exponentiel + jitter).
+  - Le job est placé dans le ZSET Redis `PAYOUT_DELAYED_SET`.
+  - À la date `next_attempt_at`, il est remis dans `PAYOUT_QUEUE`.
+- Au-delà de `PAYOUT_MAX_ATTEMPTS`, le job passe en `dead` et est ajouté à la DLQ `PAYOUT_DEAD_LETTER_QUEUE`.
+- Les jobs “stuck” (status `processing` depuis > 15 min) sont re‑éligibles au traitement.
+
+---
+
+## 9) Observability (logs + métriques + alerting)
+
+- **Logs structurés** JSON (Pino) dans `gateway`, `api`, `odds-worker`.
+- **Trace ID** : le gateway génère un `X-Request-Id` et le propage à l’API.
+- **Metrics Prometheus** :
+  - Gateway : `/metrics` (port `GATEWAY_PORT`)
+  - API : `/metrics` (port `API_PORT`)
+  - Worker : `/metrics` (port `METRICS_PORT`)
+- **Stack optionnelle** (fichier `docker-compose.observability.yml`) :
+  - Prometheus (scrape + rules), Alertmanager (alert routing)
+  - Loki (stockage logs), Promtail (collecte logs Docker)
+
+---
+
+## 10) Tests
+
+Les tests sont dans `tests/` (package séparé).
+
+### 10.1 Contract tests (OpenAPI)
+- Fichier : `tests/contract/openapi.contract.test.js`
+- Valide que les réponses de certains endpoints publiques matchent la spec OpenAPI.
+- Commande :
+  ```bash
+  cd tests
+  npm install
+  npm run test:contract
+  ```
+- Variables optionnelles :
+  - `API_URL` (par défaut `http://localhost:4000`)
+
+### 10.2 Integration tests (points + bet settlement)
+- Fichier : `tests/integration/points-bet-settlement.test.js`
+- Couvre :
+  - Crédit/débit de points admin
+  - Création de pari, achat de position, résolution et payout
+- Prérequis :
+  - `ADMIN_BOOTSTRAP_EMAIL` doit correspondre à `TEST_ADMIN_EMAIL`
+- Commande :
+  ```bash
+  cd tests
+  TEST_ADMIN_EMAIL=admin@efrei.fr TEST_ADMIN_PASSWORD=change-me npm run test:integration
+  ```
+- Variables optionnelles :
+  - `API_URL` (par défaut `http://localhost:4000`)
+  - `GATEWAY_URL` (par défaut `http://localhost:3000`)

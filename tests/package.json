@@ -1,0 +1,13 @@
+{
+  "name": "efrei-tests",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "test:contract": "node --test contract/openapi.contract.test.js",
+    "test:integration": "node --test integration/points-bet-settlement.test.js"
+  },
+  "dependencies": {
+    "@apidevtools/swagger-parser": "^12.1.0",
+    "ajv": "^8.17.1"
+  }
+}

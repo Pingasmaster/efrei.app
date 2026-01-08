@@ -8,7 +8,7 @@ COPY gateway/package.json ./
 # Install production dependencies only.
 RUN npm install --omit=dev
 
-COPY gateway/index.js ./
+COPY gateway/ ./
 
 EXPOSE 3000
 # Run the gateway entrypoint.

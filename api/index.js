@@ -12,16 +12,23 @@ const swaggerUi = require("swagger-ui-express");
 const { WebSocketServer, WebSocket } = require("ws");
 const { createClient } = require("redis");
 const mysql = require("mysql2/promise");
+const pino = require("pino");
+const promClient = require("prom-client");
 
 const app = express();
 const port = process.env.PORT || 4000;
 const jwtSecret = process.env.JWT_SECRET || "dev-secret";
+const logLevel = process.env.LOG_LEVEL || "info";
 
 // Redis configuration for realtime odds.
 const redisHost = process.env.REDIS_HOST || "redis";
 const redisPort = process.env.REDIS_PORT || "6379";
 const oddsChannel = process.env.ODDS_CHANNEL || "odds_updates";
 const payoutQueueName = process.env.PAYOUT_QUEUE || "payout_jobs";
+const payoutMaxAttemptsRaw = Number(process.env.PAYOUT_MAX_ATTEMPTS || 5);
+const payoutMaxAttempts = Number.isFinite(payoutMaxAttemptsRaw) && payoutMaxAttemptsRaw > 0
+  ? payoutMaxAttemptsRaw
+  : 5;
 
 // MySQL configuration for users, offers, bets, and points.
 const dbHost = process.env.DB_HOST || "mysql";
@@ -34,6 +41,50 @@ let dbPool = null;
 let jwtSecretsCache = { secrets: null, primary: null, fetchedAt: 0 };
 let redisQueueClient = null;
 
+const logger = pino({
+  level: logLevel,
+  base: { service: "api" },
+  timestamp: pino.stdTimeFunctions.isoTime
+});
+
+const metricsRegistry = new promClient.Registry();
+promClient.collectDefaultMetrics({ register: metricsRegistry, prefix: "api_" });
+
+const httpRequestDuration = new promClient.Histogram({
+  name: "api_http_request_duration_seconds",
+  help: "HTTP request duration in seconds",
+  labelNames: ["method", "route", "status"],
+  registers: [metricsRegistry]
+});
+
+const httpRequestsTotal = new promClient.Counter({
+  name: "api_http_requests_total",
+  help: "Total HTTP requests",
+  labelNames: ["method", "route", "status"],
+  registers: [metricsRegistry]
+});
+
+const pointsOperationsTotal = new promClient.Counter({
+  name: "api_points_operations_total",
+  help: "Total point operations",
+  labelNames: ["action", "kind"],
+  registers: [metricsRegistry]
+});
+
+const pointsAmountTotal = new promClient.Counter({
+  name: "api_points_amount_total",
+  help: "Total points moved",
+  labelNames: ["action", "kind"],
+  registers: [metricsRegistry]
+});
+
+const payoutJobsEnqueuedTotal = new promClient.Counter({
+  name: "api_payout_jobs_enqueued_total",
+  help: "Total payout jobs enqueued",
+  labelNames: ["status"],
+  registers: [metricsRegistry]
+});
+
 // Last known odds payload kept in memory for fast HTTP/WS replies.
 let latestOdds = {
   type: "odds",
@@ -44,6 +95,35 @@ let latestOdds = {
 // Allow browser calls from the frontend and parse JSON bodies.
 app.use(cors());
 app.use(express.json());
+app.use((req, res, next) => {
+  const incomingId = req.headers["x-request-id"];
+  const requestId =
+    typeof incomingId === "string" && incomingId.trim()
+      ? incomingId.trim()
+      : crypto.randomUUID();
+  req.requestId = requestId;
+  res.setHeader("X-Request-Id", requestId);
+  req.log = logger.child({ requestId });
+  const startedAt = process.hrtime.bigint();
+  res.on("finish", () => {
+    const durationMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+    const route = req.route?.path ? `${req.baseUrl || ""}${req.route.path}` : req.path;
+    const status = String(res.statusCode || 0);
+    const method = req.method;
+    httpRequestsTotal.inc({ method, route, status });
+    httpRequestDuration.observe({ method, route, status }, durationMs / 1000);
+    logger.info({
+      requestId,
+      method,
+      route,
+      status: res.statusCode,
+      durationMs: Number(durationMs.toFixed(2)),
+      userId: req.user?.id || null,
+      ip: req.ip
+    }, "http_request");
+  });
+  next();
+});
 
 const rateLimit = typeof rateLimitModule === "function" ? rateLimitModule : rateLimitModule.rateLimit;
 
@@ -216,9 +296,45 @@ const ErrorResponseSchema = z.object({
 }).openapi("ErrorResponse");
 
 const OkResponseSchema = z.object({ ok: z.literal(true) }).openapi("OkResponse");
+const MetricsResponseSchema = z.string().openapi("MetricsResponse");
+const AdminDeviceSchema = z.object({
+  id: z.number(),
+  fingerprint: z.string(),
+  userAgent: z.string().nullable(),
+  lastIp: z.string().nullable(),
+  firstSeen: z.string(),
+  lastSeen: z.string(),
+  revokedAt: z.string().nullable(),
+  revokedBy: z.number().nullable(),
+  activeSessions: z.number().int()
+}).openapi("AdminDevice");
+const AdminDeviceListSchema = z.object({
+  ok: z.literal(true),
+  devices: z.array(AdminDeviceSchema)
+}).openapi("AdminDeviceList");
+const AdminSessionSchema = z.object({
+  id: z.number(),
+  deviceId: z.number().nullable(),
+  createdAt: z.string(),
+  lastUsedAt: z.string().nullable(),
+  revokedAt: z.string().nullable(),
+  expiresAt: z.string(),
+  isActive: z.boolean(),
+  userAgent: z.string().nullable(),
+  lastIp: z.string().nullable()
+}).openapi("AdminSession");
+const AdminSessionListSchema = z.object({
+  ok: z.literal(true),
+  sessions: z.array(AdminSessionSchema)
+}).openapi("AdminSessionList");
 
 registry.register("ErrorResponse", ErrorResponseSchema);
 registry.register("OkResponse", OkResponseSchema);
+registry.register("MetricsResponse", MetricsResponseSchema);
+registry.register("AdminDevice", AdminDeviceSchema);
+registry.register("AdminDeviceList", AdminDeviceListSchema);
+registry.register("AdminSession", AdminSessionSchema);
+registry.register("AdminSessionList", AdminSessionListSchema);
 
 const zId = z.coerce.number().int().positive();
 const zOptionalId = zId.optional();
@@ -348,6 +464,25 @@ registerRoute({
 });
 app.get("/health", validateRequest(emptyRequestSchema), (req, res) => {
   res.json({ status: "ok", service: "api" });
+});
+
+registerRoute({
+  method: "get",
+  path: "/metrics",
+  summary: "Prometheus metrics",
+  tags: ["System"],
+  params: z.object({}),
+  query: z.object({}),
+  responses: {
+    200: {
+      description: "Metrics",
+      content: { "text/plain": { schema: MetricsResponseSchema } }
+    }
+  }
+});
+app.get("/metrics", async (req, res) => {
+  res.setHeader("Content-Type", metricsRegistry.contentType);
+  res.send(await metricsRegistry.metrics());
 });
 
 // Placeholder endpoint for future business logic.
@@ -720,7 +855,7 @@ const getJwtSecrets = async () => {
       return secrets;
     }
   } catch (error) {
-    console.error("JWT secret lookup failed", error);
+    logger.error({ err: error }, "JWT secret lookup failed");
   }
   return [jwtSecret];
 };
@@ -865,6 +1000,19 @@ const applyPointsDelta = async (connection, {
     relatedEntityId,
     metadata
   });
+  const metricAction = action || "unknown";
+  pointsOperationsTotal.inc({ action: metricAction, kind: "delta" });
+  pointsAmountTotal.inc({ action: metricAction, kind: "delta" }, Math.abs(Number(delta)));
+  logger.info({
+    userId,
+    actorUserId,
+    action: metricAction,
+    delta: Number(delta),
+    pointsBefore: before,
+    pointsAfter: after,
+    relatedEntityType,
+    relatedEntityId
+  }, "points_delta_applied");
   return { before, after };
 };
 
@@ -922,6 +1070,22 @@ const transferPoints = async (connection, {
     relatedEntityId,
     metadata
   });
+  const metricAction = action || "unknown";
+  pointsOperationsTotal.inc({ action: metricAction, kind: "transfer" });
+  pointsAmountTotal.inc({ action: metricAction, kind: "transfer" }, Math.abs(Number(amount)));
+  logger.info({
+    fromUserId,
+    toUserId,
+    actorUserId,
+    action: metricAction,
+    amount: Number(amount),
+    fromBefore,
+    fromAfter,
+    toBefore,
+    toAfter,
+    relatedEntityType,
+    relatedEntityId
+  }, "points_transferred");
   return { fromBefore, fromAfter, toBefore, toAfter };
 };
 
@@ -952,7 +1116,7 @@ const enqueuePayoutJob = async (connection, { betId, resultOptionId, resolvedBy,
   };
   const payloadJson = JSON.stringify(payload);
   const [existingRows] = await connection.query(
-    "SELECT id, status FROM payout_jobs WHERE bet_id = ? FOR UPDATE",
+    "SELECT id, status, attempts FROM payout_jobs WHERE bet_id = ? FOR UPDATE",
     [betId]
   );
   if (existingRows.length) {
@@ -960,23 +1124,49 @@ const enqueuePayoutJob = async (connection, { betId, resultOptionId, resolvedBy,
     if (existing.status === "completed") {
       return { jobId: Number(existing.id), alreadyCompleted: true };
     }
+    const shouldReset = ["failed", "dead", "retry_wait"].includes(existing.status);
+    const nextStatus = shouldReset ? "queued" : existing.status;
+    const nextAttempts = shouldReset ? 0 : Number(existing.attempts || 0);
     await connection.query(
-      "UPDATE payout_jobs SET result_option_id = ?, resolved_by = ?, payload = ?, status = ?, updated_at = NOW() WHERE id = ?",
-      [resultOptionId, resolvedBy, payloadJson, existing.status === "failed" ? "queued" : existing.status, existing.id]
+      `UPDATE payout_jobs
+       SET result_option_id = ?, resolved_by = ?, payload = ?, status = ?, attempts = ?, max_attempts = ?,
+           error_message = NULL, next_attempt_at = NULL, dead_at = NULL, updated_at = NOW()
+       WHERE id = ?`,
+      [resultOptionId, resolvedBy, payloadJson, nextStatus, nextAttempts, payoutMaxAttempts, existing.id]
     );
-    if (redisQueueClient && existing.status !== "processing") {
+    if (nextStatus === "queued") {
+      payoutJobsEnqueuedTotal.inc({ status: "queued" });
+      logger.info({
+        jobId: Number(existing.id),
+        betId,
+        resultOptionId,
+        resolvedBy,
+        status: "queued",
+        existing: true
+      }, "payout_job_enqueued");
+    }
+    if (redisQueueClient && existing.status !== "processing" && nextStatus === "queued") {
       await redisQueueClient.lPush(payoutQueueName, String(existing.id));
     }
     return { jobId: Number(existing.id), existing: true };
   }
   const [result] = await connection.query(
-    "INSERT INTO payout_jobs (bet_id, result_option_id, resolved_by, status, payload) VALUES (?, ?, ?, 'queued', ?)",
-    [betId, resultOptionId, resolvedBy, payloadJson]
+    "INSERT INTO payout_jobs (bet_id, result_option_id, resolved_by, status, payload, max_attempts) VALUES (?, ?, ?, 'queued', ?, ?)",
+    [betId, resultOptionId, resolvedBy, payloadJson, payoutMaxAttempts]
   );
   const jobId = Number(result.insertId);
   if (redisQueueClient) {
     await redisQueueClient.lPush(payoutQueueName, String(jobId));
   }
+  payoutJobsEnqueuedTotal.inc({ status: "queued" });
+  logger.info({
+    jobId,
+    betId,
+    resultOptionId,
+    resolvedBy,
+    status: "queued",
+    existing: false
+  }, "payout_job_enqueued");
   return { jobId, existing: false };
 };
 
@@ -2042,6 +2232,271 @@ app.get(
     } catch (error) {
       console.error("Get user logs error", error);
       return res.status(500).json({ ok: false, message: "Failed to fetch user logs." });
+    }
+  }
+);
+
+registerRoute({
+  method: "get",
+  path: "/admin/users/{id}/devices",
+  summary: "List user devices",
+  tags: ["Admin"],
+  params: z.object({ id: zId }),
+  query: z.object({ limit: zLimit.optional(), offset: zOffset.optional() }),
+  responses: {
+    200: {
+      description: "Devices",
+      content: { "application/json": { schema: AdminDeviceListSchema } }
+    }
+  }
+});
+app.get(
+  "/admin/users/:id/devices",
+  authenticate,
+  requireAdmin,
+  validateRequest(
+    z.object({
+      params: z.object({ id: zId }),
+      body: z.object({}).default({}),
+      query: z.object({ limit: zLimit.optional(), offset: zOffset.optional() })
+    })
+  ),
+  async (req, res) => {
+    const userId = parsePositiveInt(req.params.id);
+    if (!userId) {
+      return res.status(400).json({ ok: false, message: "Invalid user id." });
+    }
+    try {
+      const limit = req.query.limit ?? 50;
+      const offset = req.query.offset ?? 0;
+      const [rows] = await dbPool.query(
+        `SELECT d.id,
+                d.fingerprint,
+                d.user_agent AS userAgent,
+                d.last_ip AS lastIp,
+                d.first_seen AS firstSeen,
+                d.last_seen AS lastSeen,
+                d.revoked_at AS revokedAt,
+                d.revoked_by AS revokedBy,
+                (
+                  SELECT COUNT(*)
+                  FROM refresh_tokens rt
+                  WHERE rt.user_id = d.user_id
+                    AND rt.device_id = d.id
+                    AND rt.revoked_at IS NULL
+                    AND rt.expires_at > NOW()
+                ) AS activeSessions
+         FROM user_devices d
+         WHERE d.user_id = ?
+         ORDER BY d.last_seen DESC
+         LIMIT ? OFFSET ?`,
+        [userId, limit, offset]
+      );
+      await logAudit(dbPool, {
+        actorUserId: req.user.id,
+        targetUserId: userId,
+        action: "admin_list_devices",
+        reason: "list_devices",
+        metadata: { limit, offset }
+      });
+      return res.json({ ok: true, devices: rows });
+    } catch (error) {
+      console.error("List devices error", error);
+      return res.status(500).json({ ok: false, message: "Failed to list devices." });
+    }
+  }
+);
+
+registerRoute({
+  method: "delete",
+  path: "/admin/users/{id}/devices/{deviceId}",
+  summary: "Revoke user device",
+  tags: ["Admin"],
+  params: z.object({ id: zId, deviceId: zId })
+});
+app.delete(
+  "/admin/users/:id/devices/:deviceId",
+  authenticate,
+  requireAdmin,
+  validateRequest(
+    z.object({
+      params: z.object({ id: zId, deviceId: zId }),
+      query: z.object({}),
+      body: z.object({}).default({})
+    })
+  ),
+  async (req, res) => {
+    const userId = parsePositiveInt(req.params.id);
+    const deviceId = parsePositiveInt(req.params.deviceId);
+    if (!userId || !deviceId) {
+      return res.status(400).json({ ok: false, message: "Invalid user or device id." });
+    }
+    const connection = await dbPool.getConnection();
+    try {
+      await connection.beginTransaction();
+      const [deviceRows] = await connection.query(
+        "SELECT id, revoked_at AS revokedAt FROM user_devices WHERE id = ? AND user_id = ? FOR UPDATE",
+        [deviceId, userId]
+      );
+      if (!deviceRows.length) {
+        await connection.rollback();
+        return res.status(404).json({ ok: false, message: "Device not found." });
+      }
+      if (!req.user.isSuperAdmin && (await isUserInRole(userId, "super_admin", connection))) {
+        await connection.rollback();
+        return res.status(403).json({ ok: false, message: "Cannot revoke super admin devices." });
+      }
+      const alreadyRevoked = Boolean(deviceRows[0].revokedAt);
+      await connection.query(
+        "UPDATE user_devices SET revoked_at = COALESCE(revoked_at, NOW()), revoked_by = ? WHERE id = ? AND user_id = ?",
+        [req.user.id, deviceId, userId]
+      );
+      const [sessionResult] = await connection.query(
+        "UPDATE refresh_tokens SET revoked_at = NOW() WHERE user_id = ? AND device_id = ? AND revoked_at IS NULL",
+        [userId, deviceId]
+      );
+      const revokedSessions = Number(sessionResult.affectedRows || 0);
+      await logAudit(connection, {
+        actorUserId: req.user.id,
+        targetUserId: userId,
+        action: "admin_device_revoke",
+        reason: "revoke_device",
+        relatedEntityType: "user_device",
+        relatedEntityId: deviceId,
+        metadata: { revokedSessions, alreadyRevoked }
+      });
+      await connection.commit();
+      return res.json({ ok: true, deviceId, revokedSessions, alreadyRevoked });
+    } catch (error) {
+      await connection.rollback();
+      console.error("Revoke device error", error);
+      return res.status(500).json({ ok: false, message: "Failed to revoke device." });
+    } finally {
+      connection.release();
+    }
+  }
+);
+
+registerRoute({
+  method: "get",
+  path: "/admin/users/{id}/sessions",
+  summary: "List user sessions",
+  tags: ["Admin"],
+  params: z.object({ id: zId }),
+  query: z.object({ limit: zLimit.optional(), offset: zOffset.optional() }),
+  responses: {
+    200: {
+      description: "Sessions",
+      content: { "application/json": { schema: AdminSessionListSchema } }
+    }
+  }
+});
+app.get(
+  "/admin/users/:id/sessions",
+  authenticate,
+  requireAdmin,
+  validateRequest(
+    z.object({
+      params: z.object({ id: zId }),
+      body: z.object({}).default({}),
+      query: z.object({ limit: zLimit.optional(), offset: zOffset.optional() })
+    })
+  ),
+  async (req, res) => {
+    const userId = parsePositiveInt(req.params.id);
+    if (!userId) {
+      return res.status(400).json({ ok: false, message: "Invalid user id." });
+    }
+    try {
+      const limit = req.query.limit ?? 50;
+      const offset = req.query.offset ?? 0;
+      const [rows] = await dbPool.query(
+        `SELECT rt.id,
+                rt.device_id AS deviceId,
+                rt.created_at AS createdAt,
+                rt.last_used_at AS lastUsedAt,
+                rt.revoked_at AS revokedAt,
+                rt.expires_at AS expiresAt,
+                (rt.revoked_at IS NULL AND rt.expires_at > NOW()) AS isActive,
+                d.user_agent AS userAgent,
+                d.last_ip AS lastIp
+         FROM refresh_tokens rt
+         LEFT JOIN user_devices d ON d.id = rt.device_id
+         WHERE rt.user_id = ?
+         ORDER BY rt.created_at DESC
+         LIMIT ? OFFSET ?`,
+        [userId, limit, offset]
+      );
+      await logAudit(dbPool, {
+        actorUserId: req.user.id,
+        targetUserId: userId,
+        action: "admin_list_sessions",
+        reason: "list_sessions",
+        metadata: { limit, offset }
+      });
+      return res.json({ ok: true, sessions: rows.map((row) => ({ ...row, isActive: Boolean(row.isActive) })) });
+    } catch (error) {
+      console.error("List sessions error", error);
+      return res.status(500).json({ ok: false, message: "Failed to list sessions." });
+    }
+  }
+);
+
+registerRoute({
+  method: "delete",
+  path: "/admin/users/{id}/sessions/{sessionId}",
+  summary: "Revoke user session",
+  tags: ["Admin"],
+  params: z.object({ id: zId, sessionId: zId })
+});
+app.delete(
+  "/admin/users/:id/sessions/:sessionId",
+  authenticate,
+  requireAdmin,
+  validateRequest(
+    z.object({
+      params: z.object({ id: zId, sessionId: zId }),
+      query: z.object({}),
+      body: z.object({}).default({})
+    })
+  ),
+  async (req, res) => {
+    const userId = parsePositiveInt(req.params.id);
+    const sessionId = parsePositiveInt(req.params.sessionId);
+    if (!userId || !sessionId) {
+      return res.status(400).json({ ok: false, message: "Invalid user or session id." });
+    }
+    const connection = await dbPool.getConnection();
+    try {
+      await connection.beginTransaction();
+      if (!req.user.isSuperAdmin && (await isUserInRole(userId, "super_admin", connection))) {
+        await connection.rollback();
+        return res.status(403).json({ ok: false, message: "Cannot revoke super admin sessions." });
+      }
+      const [result] = await connection.query(
+        "UPDATE refresh_tokens SET revoked_at = NOW() WHERE id = ? AND user_id = ?",
+        [sessionId, userId]
+      );
+      if (!result.affectedRows) {
+        await connection.rollback();
+        return res.status(404).json({ ok: false, message: "Session not found." });
+      }
+      await logAudit(connection, {
+        actorUserId: req.user.id,
+        targetUserId: userId,
+        action: "admin_session_revoke",
+        reason: "revoke_session",
+        relatedEntityType: "refresh_token",
+        relatedEntityId: sessionId
+      });
+      await connection.commit();
+      return res.json({ ok: true, sessionId });
+    } catch (error) {
+      await connection.rollback();
+      console.error("Revoke session error", error);
+      return res.status(500).json({ ok: false, message: "Failed to revoke session." });
+    } finally {
+      connection.release();
     }
   }
 );
@@ -4879,14 +5334,14 @@ wss.on("connection", (socket) => {
 const connectRedis = async () => {
   const client = createClient({ url: `redis://${redisHost}:${redisPort}` });
   client.on("error", (err) => {
-    console.error("Redis error", err);
+    logger.error({ err }, "Redis error");
   });
   await client.connect();
   redisQueueClient = client;
 
   const subscriber = client.duplicate();
   subscriber.on("error", (err) => {
-    console.error("Redis subscriber error", err);
+    logger.error({ err }, "Redis subscriber error");
   });
   await subscriber.connect();
   await subscriber.subscribe(oddsChannel, (message) => {
@@ -5121,13 +5576,19 @@ const ensureSchema = async () => {
       fingerprint CHAR(64) NOT NULL,
       user_agent TEXT NULL,
       last_ip VARCHAR(64) NULL,
+      revoked_at DATETIME NULL,
+      revoked_by BIGINT UNSIGNED NULL,
       first_seen TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       last_seen TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       UNIQUE KEY uniq_user_device (user_id, fingerprint),
       CONSTRAINT fk_user_devices_user FOREIGN KEY (user_id) REFERENCES users(id)
-        ON DELETE CASCADE ON UPDATE CASCADE
+        ON DELETE CASCADE ON UPDATE CASCADE,
+      CONSTRAINT fk_user_devices_revoked_by FOREIGN KEY (revoked_by) REFERENCES users(id)
+        ON DELETE SET NULL ON UPDATE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`;
   await dbPool.query(createUserDevicesTableSql);
+  await ensureColumn("user_devices", "revoked_at", "revoked_at DATETIME NULL");
+  await ensureColumn("user_devices", "revoked_by", "revoked_by BIGINT UNSIGNED NULL");
 
   const createGroupsTableSql = `
     CREATE TABLE IF NOT EXISTS user_groups (
@@ -5227,6 +5688,10 @@ const ensureSchema = async () => {
       status VARCHAR(16) NOT NULL DEFAULT 'queued',
       error_message TEXT NULL,
       attempts INT NOT NULL DEFAULT 0,
+      max_attempts INT NOT NULL DEFAULT 5,
+      next_attempt_at DATETIME NULL,
+      last_error_at DATETIME NULL,
+      dead_at DATETIME NULL,
       started_at DATETIME NULL,
       completed_at DATETIME NULL,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -5243,6 +5708,10 @@ const ensureSchema = async () => {
   await ensureColumn("payout_jobs", "result_option_id", "result_option_id BIGINT UNSIGNED NULL");
   await ensureColumn("payout_jobs", "resolved_by", "resolved_by BIGINT UNSIGNED NULL");
   await ensureColumn("payout_jobs", "payload", "payload JSON NULL");
+  await ensureColumn("payout_jobs", "max_attempts", "max_attempts INT NOT NULL DEFAULT 5");
+  await ensureColumn("payout_jobs", "next_attempt_at", "next_attempt_at DATETIME NULL");
+  await ensureColumn("payout_jobs", "last_error_at", "last_error_at DATETIME NULL");
+  await ensureColumn("payout_jobs", "dead_at", "dead_at DATETIME NULL");
 
   const createBetOptionsTableSql = `
     CREATE TABLE IF NOT EXISTS bet_options (
@@ -5300,6 +5769,7 @@ const ensureSchema = async () => {
     CREATE TABLE IF NOT EXISTS refresh_tokens (
       id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
       user_id BIGINT UNSIGNED NOT NULL,
+      device_id BIGINT UNSIGNED NULL,
       token_hash CHAR(64) NOT NULL,
       expires_at DATETIME NOT NULL,
       revoked_at DATETIME NULL,
@@ -5307,9 +5777,12 @@ const ensureSchema = async () => {
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       CONSTRAINT fk_refresh_user FOREIGN KEY (user_id) REFERENCES users(id)
         ON DELETE CASCADE ON UPDATE CASCADE,
+      CONSTRAINT fk_refresh_device FOREIGN KEY (device_id) REFERENCES user_devices(id)
+        ON DELETE SET NULL ON UPDATE CASCADE,
       UNIQUE KEY uniq_refresh_token (token_hash)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`;
   await dbPool.query(createRefreshTokensTableSql);
+  await ensureColumn("refresh_tokens", "device_id", "device_id BIGINT UNSIGNED NULL");
 
   const createOfferReviewsTableSql = `
     CREATE TABLE IF NOT EXISTS offer_reviews (
@@ -5377,10 +5850,10 @@ const bootstrapAdmin = async () => {
           await ensureUserRole(targetUserId, superRoleId, targetUserId);
         }
       }
-      console.log("Admin bootstrap applied.");
+      logger.info("Admin bootstrap applied.");
     }
   } catch (error) {
-    console.error("Admin bootstrap failed", error);
+    logger.error({ err: error }, "Admin bootstrap failed");
   }
 };
 
@@ -5407,7 +5880,7 @@ const initDatabase = async () => {
       if (attempt === maxAttempts) {
         throw error;
       }
-      console.warn(`MySQL not ready (attempt ${attempt}/${maxAttempts}), retrying...`);
+      logger.warn({ attempt, maxAttempts }, "MySQL not ready, retrying");
       await new Promise((resolve) => setTimeout(resolve, 2000));
     }
   }
@@ -5422,11 +5895,11 @@ const start = async () => {
 
   // Start the HTTP server (WS piggybacks on it).
   server.listen(port, () => {
-    console.log(`API listening on ${port}`);
+    logger.info({ port }, "API listening");
   });
 };
 
 start().catch((error) => {
-  console.error("API failed to start", error);
+  logger.error({ err: error }, "API failed to start");
   process.exit(1);
 });

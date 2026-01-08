@@ -4,3 +4,4 @@
 node_modules/
 # macOS Finder metadata.
 .DS_Store
+AGENTS.md

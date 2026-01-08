@@ -33,6 +33,20 @@ docker compose up --build
 
 Les urls sont http://localhost:8080 pour le frontend, http://localhost:3000 pour la gateway et http://api:4000 pour l'api métier.
 
+## Observability (logs + metrics + alerting)
+Une stack optionnelle Prometheus + Alertmanager + Loki + Promtail est fournie. Pour la lancer:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.observability.yml up --build
+```
+
+Endpoints utiles:
+- Prometheus: http://localhost:9090
+- Alertmanager: http://localhost:9093
+- Loki: http://localhost:3100
+
+Les métriques sont exposées sur `/metrics` (gateway + api) et `METRICS_PORT` (worker).
+
 ## Validation de l'environnement
 
 Ce projet refuse de démarrer si le .env n'existe pas ou si il manque des valeurs. Pour démarrer, copiez le .env.exmaple en .env et mettez vos mots de passe:

@@ -1,0 +1,51 @@
+groups:
+  - name: payouts
+    rules:
+      - alert: PayoutJobsDead
+        expr: worker_payout_jobs_total{status="dead"} > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Payout jobs moved to the dead-letter queue"
+          description: "One or more payout jobs are marked dead. Inspect the DLQ and logs."
+
+      - alert: PayoutJobFailuresHigh
+        expr: rate(worker_payout_jobs_total{status="retry_wait"}[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Payout job failures detected"
+          description: "Payout jobs are failing consistently. Check worker logs and DB."
+
+      - alert: PayoutQueueBacklog
+        expr: worker_payout_queue_depth > 25
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Payout queue backlog"
+          description: "Payout queue depth has been above 25 for 10 minutes."
+
+  - name: auth
+    rules:
+      - alert: AuthFailuresSpike
+        expr: rate(gateway_auth_requests_total{status="error"}[5m]) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Auth failures spiking"
+          description: "Gateway auth errors exceeded threshold. Investigate auth logs."
+
+  - name: points
+    rules:
+      - alert: PointsOperationsSpike
+        expr: rate(api_points_operations_total[5m]) > 50
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High volume of point operations"
+          description: "Point operations exceeded expected volume. Investigate recent activity."
