@@ -7,13 +7,15 @@ const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
 const rateLimitModule = require("express-rate-limit");
 const { z } = require("zod");
-const { OpenAPIRegistry, OpenApiGeneratorV3 } = require("@asteasolutions/zod-to-openapi");
+const { OpenAPIRegistry, OpenApiGeneratorV3, extendZodWithOpenApi } = require("@asteasolutions/zod-to-openapi");
 const swaggerUi = require("swagger-ui-express");
 const { WebSocketServer, WebSocket } = require("ws");
 const { createClient } = require("redis");
 const mysql = require("mysql2/promise");
 const pino = require("pino");
 const promClient = require("prom-client");
+
+extendZodWithOpenApi(z);
 
 const app = express();
 const port = process.env.PORT || 4000;
@@ -5678,6 +5680,19 @@ const ensureSchema = async () => {
   await ensureColumn("bets", "details", "details TEXT");
   await ensureColumn("bets", "group_id", "group_id BIGINT UNSIGNED NULL");
 
+  const createBetOptionsTableSql = `
+    CREATE TABLE IF NOT EXISTS bet_options (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+      bet_id BIGINT UNSIGNED NOT NULL,
+      label VARCHAR(160) NOT NULL,
+      numeric_value DECIMAL(12,2) NULL,
+      current_odds DECIMAL(7,2) NOT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT fk_bet_options_bet FOREIGN KEY (bet_id) REFERENCES bets(id)
+        ON DELETE CASCADE ON UPDATE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`;
+  await dbPool.query(createBetOptionsTableSql);
+
   const createPayoutJobsTableSql = `
     CREATE TABLE IF NOT EXISTS payout_jobs (
       id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -5712,19 +5727,6 @@ const ensureSchema = async () => {
   await ensureColumn("payout_jobs", "next_attempt_at", "next_attempt_at DATETIME NULL");
   await ensureColumn("payout_jobs", "last_error_at", "last_error_at DATETIME NULL");
   await ensureColumn("payout_jobs", "dead_at", "dead_at DATETIME NULL");
-
-  const createBetOptionsTableSql = `
-    CREATE TABLE IF NOT EXISTS bet_options (
-      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
-      bet_id BIGINT UNSIGNED NOT NULL,
-      label VARCHAR(160) NOT NULL,
-      numeric_value DECIMAL(12,2) NULL,
-      current_odds DECIMAL(7,2) NOT NULL,
-      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      CONSTRAINT fk_bet_options_bet FOREIGN KEY (bet_id) REFERENCES bets(id)
-        ON DELETE CASCADE ON UPDATE CASCADE
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`;
-  await dbPool.query(createBetOptionsTableSql);
 
   const createPositionsTableSql = `
     CREATE TABLE IF NOT EXISTS bet_positions (

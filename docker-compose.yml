@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   # One-shot job that validates required .env values before boot.
   env-check:
@@ -95,6 +93,7 @@ services:
   # MySQL database with a persistent named volume.
   mysql:
     image: mysql:9.5.0
+    command: ["--log-bin-trust-function-creators=1"]
     environment:
       MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD}"
       MYSQL_DATABASE: "${DB_NAME}"
