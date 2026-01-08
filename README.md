@@ -1,37 +1,51 @@
 # efrei.app
 
-## Architecture (Docker-only workflow)
-This project is designed to run **exclusively** via Docker Compose. The stack is split into at least four tiers that communicate on a private Docker network and are serve on the final https://efrei.app website.
+C'est le meileur site web de paris pour tout ce qui se passe à l'efrei.
 
-**Tiers / Containers**
-1. **Frontend (Tier 1)**: Nginx serving the static files from `www/`.
-2. **API Gateway / Auth (Tier 2)**: Express gateway that handles auth endpoints and proxies `/api/*` to the business API.
-3. **Business API (Tier 3)**: Express service with stub endpoints for your future logic.
-4. **Database (Tier 4)**: MySQL with persistent volume.
-5. **Cache (Bonus)**: Redis for DB caching.
-6. **Odds Worker (Bonus)**: Publishes live odds to Redis for realtime streaming.
+Pariez avec des points, et echangez-les entre élèves ou pour des récompenses.
 
-**Network**: All services are attached to the internal Docker network `internal`.
+Ce projet comporte quatre conteneurs qui s'occupent de tout:
 
-## Run
+1. Frontend (Tier 1): Nginx sers les fichiers statiques qui se trouvent dans `www/`.
+2. API Gateway / Auth (Tier 2): Une gateway express qui gère l'authentification et les proxies `/api/*` vers la logique métier.
+3. Business API (Tier 3): Service express avec principalement des stubs pour l'instants pour la future logique métier.
+4. Database (Tier 4): MySQL with persistent volume.
+5. Cache (Bonus): Redis est utilisé pour cacher la DB.
+6. Odds Worker (Bonus): Publies les côtes en temps réel vers redis pour le streaming en temps réel.
+
+Tous les conteneurs utilisent le network interne "internal" de docker. POur lancer tout le projet il suffit de faire:
+
+## Lancement de l'app
+
+Au premier lancement il faut créer le .env et le customiser (obligatoire!!!):
+
+```bash
+cp .env.example .env
+nano .env # Mettre les mots de passe requis
+docker compose up --build
+```
+
+Pour tous lers lancement suivants on peut juste faire:
+
 ```bash
 docker compose up --build
 ```
 
-- Frontend: http://localhost:8080
-- Gateway: http://localhost:3000
-- Business API (internal): http://api:4000
+Les urls sont http://localhost:8080 pour le frontend, http://localhost:3000 pour la gateway et http://api:4000 pour l'api métier.
 
-## Environment validation
-The stack refuses to start if any required `.env` variable is missing or invalid. A dedicated `env-check` service runs first and prints clear errors for missing/incorrect values.
+## Validation de l'environnement
 
-## Teardown
-Run `./scripts/teardown.sh` to stop and remove all containers, networks, and volumes for this project. It prompts for confirmation before deleting.
+Ce projet refuse de démarrer si le .env n'existe pas ou si il manque des valeurs. Pour démarrer, copiez le .env.exmaple en .env et mettez vos mots de passe:
 
-## External reverse proxy (efrei.app)
-An example nginx vhost is provided at `deploy/nginx-efrei.app.conf` for hosting the stack behind a non-Docker reverse proxy on `efrei.app`.
+Pour supprimer tous les conteneurs que ce projet démarre vous pouvez faire appel ça ce script dédié:
 
-## Realtime Odds (WebSocket)
-- Worker publishes odds to Redis (`ODDS_CHANNEL`).
-- API subscribes and broadcasts via WebSocket at `/ws/odds`.
-- Frontend connects through the gateway: `ws://localhost:3000/ws/odds`.
+```bash
+./scripts/teardown.sh
+```
+
+## Reverse proxy externe vers le vrai site (efrei.app)
+Pour l'instant, ce projet nécessite qu'un reverse proxy externe nginx soit pointé vers le déploiement pour la prod https://efrei.app. 
+Une config adéquate est donnée à `deploy/nginx-efrei.app.conf` pour la config du reverse proxy nginx. Il sera possiblement intégré dans l'app dans le futur, à voir.
+
+## Côtes en temps réels via websockets
+Pour ce site les côtes sont calculées et projetées en temps réel via un worker qui publie les côtes à redis (`ODDS_CHANNEL`), une API qui écoute et broadcast via des websockets sur `/ws/odds`, qui est connecté au fontend via la gateway `ws://localhost:3000/ws/odds`.
