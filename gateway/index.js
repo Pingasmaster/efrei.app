@@ -1,6 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 const jwt = require("jsonwebtoken");
+const http = require("http");
 const { createProxyMiddleware } = require("http-proxy-middleware");
 
 const app = express();
@@ -26,15 +27,28 @@ app.post("/auth/login", (req, res) => {
   res.json({ token });
 });
 
-app.use(
-  "/api",
-  createProxyMiddleware({
-    target: businessApiUrl,
-    changeOrigin: true,
-    pathRewrite: { "^/api": "" }
-  })
-);
+const apiProxy = createProxyMiddleware({
+  target: businessApiUrl,
+  changeOrigin: true,
+  pathRewrite: { "^/api": "" }
+});
 
-app.listen(port, () => {
+const wsProxy = createProxyMiddleware({
+  target: businessApiUrl,
+  changeOrigin: true,
+  ws: true
+});
+
+app.use("/api", apiProxy);
+app.use("/ws", wsProxy);
+
+const server = http.createServer(app);
+server.on("upgrade", (req, socket, head) => {
+  if (req.url && req.url.startsWith("/ws")) {
+    wsProxy.upgrade(req, socket, head);
+  }
+});
+
+server.listen(port, () => {
   console.log(`Gateway listening on ${port}`);
 });

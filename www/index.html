@@ -3,19 +3,29 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="api-base" content="">
     <title>Efrei.app</title>
     <link rel="stylesheet" href="/lib/css/styles.css">
 </head>
 <body>
-    <div id="app"></div>
+    <div class="app-shell">
+        <header class="site-header">
+            <a class="brand" href="/" data-link>Efrei.app</a>
+            <nav class="nav">
+                <a href="/" data-link>Home</a>
+                <a class="btn ghost" href="/login" data-link>Login</a>
+                <a class="btn primary" href="/signup" data-link>Sign up</a>
+            </nav>
+            <span class="nav-status" data-auth-status>Guest</span>
+        </header>
 
-    <script src="/lib/js/app.js"></script>
-    <script>
-        if ("serviceWorker" in navigator) {
-            window.addEventListener("load", () => {
-                navigator.serviceWorker.register("/sw.js").catch(() => {});
-            });
-        }
-    </script>
+        <main id="view" class="view" aria-live="polite"></main>
+
+        <footer class="site-footer">
+            <span>EFREI.app · Docker-native stack</span>
+        </footer>
+    </div>
+
+    <script type="module" src="/lib/js/app.js"></script>
 </body>
 </html>

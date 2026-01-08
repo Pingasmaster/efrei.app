@@ -1,6 +1,16 @@
 version: "3.9"
 
 services:
+  env-check:
+    image: alpine:3.23.2
+    command: ["/bin/sh", "/opt/validate-env.sh"]
+    env_file: .env
+    volumes:
+      - ./scripts/validate-env.sh:/opt/validate-env.sh:ro
+    restart: "no"
+    networks:
+      - internal
+
   frontend:
     build:
       context: .
@@ -8,7 +18,10 @@ services:
     ports:
       - "${FRONTEND_PORT}:80"
     depends_on:
-      - gateway
+      env-check:
+        condition: service_completed_successfully
+      gateway:
+        condition: service_started
     networks:
       - internal
 
@@ -30,9 +43,14 @@ services:
     ports:
       - "${GATEWAY_PORT}:3000"
     depends_on:
-      - api
-      - mysql
-      - redis
+      env-check:
+        condition: service_completed_successfully
+      api:
+        condition: service_started
+      mysql:
+        condition: service_started
+      redis:
+        condition: service_started
     networks:
       - internal
 
@@ -49,14 +67,19 @@ services:
       DB_PASSWORD: "${DB_PASSWORD}"
       REDIS_HOST: "${REDIS_HOST}"
       REDIS_PORT: "${REDIS_PORT}"
+      ODDS_CHANNEL: "${ODDS_CHANNEL}"
     depends_on:
-      - mysql
-      - redis
+      env-check:
+        condition: service_completed_successfully
+      mysql:
+        condition: service_started
+      redis:
+        condition: service_started
     networks:
       - internal
 
   mysql:
-    image: mysql:8.4
+    image: mysql:9.5.0
     environment:
       MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD}"
       MYSQL_DATABASE: "${DB_NAME}"
@@ -64,11 +87,34 @@ services:
       MYSQL_PASSWORD: "${DB_PASSWORD}"
     volumes:
       - mysql_data:/var/lib/mysql
+    depends_on:
+      env-check:
+        condition: service_completed_successfully
     networks:
       - internal
 
   redis:
-    image: redis:7.2-alpine
+    image: redis:8.4.0-alpine
+    depends_on:
+      env-check:
+        condition: service_completed_successfully
+    networks:
+      - internal
+
+  odds-worker:
+    build:
+      context: .
+      dockerfile: worker/Containerfile
+    environment:
+      REDIS_HOST: "${REDIS_HOST}"
+      REDIS_PORT: "${REDIS_PORT}"
+      ODDS_CHANNEL: "${ODDS_CHANNEL}"
+      ODDS_INTERVAL_MS: "${ODDS_INTERVAL_MS}"
+    depends_on:
+      env-check:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
     networks:
       - internal
 

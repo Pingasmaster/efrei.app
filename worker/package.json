@@ -1,5 +1,5 @@
 {
-  "name": "efrei-api",
+  "name": "efrei-odds-worker",
   "version": "0.1.0",
   "private": true,
   "type": "commonjs",
@@ -7,9 +7,6 @@
     "start": "node index.js"
   },
   "dependencies": {
-    "cors": "^2.8.5",
-    "express": "^5.2.1",
-    "redis": "^5.8.2",
-    "ws": "^8.18.3"
+    "redis": "^5.8.2"
   }
 }

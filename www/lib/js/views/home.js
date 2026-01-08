@@ -1,0 +1,233 @@
+const formatTime = (value) => {
+    if (!value) return "Soon";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "Soon";
+    return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+};
+
+export const renderHome = (root, { state }) => {
+    root.innerHTML = `
+        <section class="hero">
+            <div class="hero-copy">
+                <p class="eyebrow">Docker-first experience</p>
+                <h1>Live odds, clean UX.</h1>
+                <p class="lead">
+                    A lightweight, realtime-ready betting shell with a gateway, API, and cache-backed odds feed.
+                </p>
+                <div class="hero-actions">
+                    <a class="btn primary" href="/signup" data-link>Get started</a>
+                    <a class="btn ghost" href="/login" data-link>Sign in</a>
+                </div>
+            </div>
+            <div class="hero-card">
+                <div class="stat">
+                    <span class="stat-value">Realtime odds</span>
+                    <span class="stat-label">WebSocket stream + Redis pub/sub</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-value">Compose-only</span>
+                    <span class="stat-label">Every service runs in Docker</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-value">Offline-ready</span>
+                    <span class="stat-label">Service worker caching</span>
+                </div>
+            </div>
+        </section>
+
+        <section class="market-layout">
+            <div class="markets">
+                <div class="markets-header">
+                    <div>
+                        <p class="eyebrow">Live markets</p>
+                        <h2>Featured matches</h2>
+                    </div>
+                    <span class="status-pill" data-odds-status>Offline</span>
+                </div>
+                <div class="odds-grid" data-odds-grid></div>
+            </div>
+
+            <aside class="bet-slip">
+                <div class="bet-slip-header">
+                    <h3>Bet slip</h3>
+                    <span class="badge" data-slip-count>0</span>
+                </div>
+                <div class="bet-slip-list" data-slip-list></div>
+                <div class="bet-slip-summary">
+                    <label class="field">
+                        <span>Stake</span>
+                        <input type="number" min="1" value="10" data-stake>
+                    </label>
+                    <div class="summary-row">
+                        <span>Potential return</span>
+                        <strong data-return>€0.00</strong>
+                    </div>
+                    <button class="btn primary" type="button" data-place-bet disabled>Place bet</button>
+                    <button class="btn ghost" type="button" data-clear-slip>Clear slip</button>
+                    <div class="form-status" role="status" aria-live="polite" data-slip-status></div>
+                </div>
+            </aside>
+        </section>
+    `;
+
+    const oddsGrid = root.querySelector("[data-odds-grid]");
+    const statusPill = root.querySelector("[data-odds-status]");
+    const slipList = root.querySelector("[data-slip-list]");
+    const slipCount = root.querySelector("[data-slip-count]");
+    const stakeInput = root.querySelector("[data-stake]");
+    const returnValue = root.querySelector("[data-return]");
+    const placeBetButton = root.querySelector("[data-place-bet]");
+    const clearSlipButton = root.querySelector("[data-clear-slip]");
+    const slipStatus = root.querySelector("[data-slip-status]");
+
+    const renderOdds = (snapshot) => {
+        const selectedIds = new Set(snapshot.betslip.map((item) => item.id));
+        if (!snapshot.odds.length) {
+            oddsGrid.innerHTML = `<div class="empty">Waiting for live odds...</div>`;
+            return;
+        }
+
+        oddsGrid.innerHTML = snapshot.odds
+            .map((event) => {
+                const selections = event.markets
+                    .map((selection) => {
+                        const selected = selectedIds.has(selection.id) ? "selected" : "";
+                        return `
+                            <button class="selection ${selected}" type="button" data-selection-id="${selection.id}" data-event-id="${event.id}" data-label="${selection.label}" data-price="${selection.price}">
+                                <span>${selection.label}</span>
+                                <strong>${selection.price.toFixed(2)}</strong>
+                            </button>
+                        `;
+                    })
+                    .join("");
+
+                return `
+                    <article class="event-card">
+                        <div class="event-meta">
+                            <span class="event-league">${event.league}</span>
+                            <span class="event-time">${formatTime(event.startsAt)}</span>
+                        </div>
+                        <div class="event-teams">
+                            <span>${event.home}</span>
+                            <span class="versus">vs</span>
+                            <span>${event.away}</span>
+                        </div>
+                        <div class="event-selections">
+                            ${selections}
+                        </div>
+                    </article>
+                `;
+            })
+            .join("");
+    };
+
+    const renderSlip = (snapshot) => {
+        slipCount.textContent = snapshot.betslip.length;
+        if (!snapshot.betslip.length) {
+            slipList.innerHTML = `<div class="empty">No selections yet.</div>`;
+            placeBetButton.disabled = true;
+            returnValue.textContent = "€0.00";
+            return;
+        }
+
+        slipList.innerHTML = snapshot.betslip
+            .map((item) => {
+                return `
+                    <div class="slip-item">
+                        <div>
+                            <span class="slip-label">${item.label}</span>
+                            <span class="slip-odds">${item.price.toFixed(2)}</span>
+                        </div>
+                        <button class="slip-remove" type="button" data-slip-remove="${item.id}">Remove</button>
+                    </div>
+                `;
+            })
+            .join("");
+
+        const stake = Number(stakeInput.value || 0);
+        const combinedOdds = snapshot.betslip.reduce((total, item) => total * item.price, 1);
+        const potential = stake > 0 ? stake * combinedOdds : 0;
+        returnValue.textContent = `€${potential.toFixed(2)}`;
+        placeBetButton.disabled = false;
+    };
+
+    const renderStatus = (snapshot) => {
+        const statusMap = {
+            connecting: "Connecting",
+            connected: "Live",
+            disconnected: "Disconnected",
+            error: "Error",
+            closed: "Closed",
+            offline: "Offline"
+        };
+        statusPill.textContent = statusMap[snapshot.oddsStatus] || "Offline";
+        statusPill.dataset.status = snapshot.oddsStatus;
+    };
+
+    const handleClick = (event) => {
+        const selection = event.target.closest("[data-selection-id]");
+        if (selection) {
+            const selectionId = selection.dataset.selectionId;
+            if (state.betslip.some((item) => item.id === selectionId)) {
+                state.removeSlip(selectionId);
+                return;
+            }
+            const payload = {
+                id: selectionId,
+                eventId: selection.dataset.eventId,
+                label: selection.dataset.label,
+                price: Number(selection.dataset.price)
+            };
+            state.addSlip(payload);
+            return;
+        }
+
+        const remove = event.target.closest("[data-slip-remove]");
+        if (remove) {
+            state.removeSlip(remove.dataset.slipRemove);
+            return;
+        }
+    };
+
+    const handleStakeChange = () => {
+        const snapshot = {
+            odds: state.odds,
+            betslip: state.betslip,
+            oddsStatus: state.oddsStatus
+        };
+        renderSlip(snapshot);
+    };
+
+    const handlePlaceBet = () => {
+        slipStatus.textContent = "Bet placed (stub).";
+        slipStatus.classList.remove("error");
+        slipStatus.classList.add("success");
+        state.clearSlip();
+    };
+
+    const handleClearSlip = () => {
+        state.clearSlip();
+        slipStatus.textContent = "Slip cleared.";
+        slipStatus.classList.remove("error");
+        slipStatus.classList.add("success");
+    };
+
+    root.addEventListener("click", handleClick);
+    stakeInput.addEventListener("input", handleStakeChange);
+    placeBetButton.addEventListener("click", handlePlaceBet);
+    clearSlipButton.addEventListener("click", handleClearSlip);
+
+    const unsubscribe = state.subscribe((snapshot) => {
+        renderStatus(snapshot);
+        renderOdds(snapshot);
+        renderSlip(snapshot);
+    });
+
+    return () => {
+        root.removeEventListener("click", handleClick);
+        stakeInput.removeEventListener("input", handleStakeChange);
+        placeBetButton.removeEventListener("click", handlePlaceBet);
+        clearSlipButton.removeEventListener("click", handleClearSlip);
+        unsubscribe();
+    };
+};

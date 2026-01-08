@@ -1,55 +1,85 @@
-class App {
-    constructor () {
-        // Variables for the page gestion system
-        this.currentPage = "Home";
-        this.pages = [
-            "Home" : new Home(),
-            "Login": new Login(),
-            "Signup": new Signup(),
-            "Profil": new Profil(),
-            "Magasin": new Magasin(),
-            "Paris": new Paris(),
-        ];
-        this.titles = [
-            "Home": "Accueil",
-            "Test1": "Test 1 - Première page de test"
-            "Home": "Accueil",
-            "Test1": "Test 1 - Première page de test"
-            "Test1": "Test 1 - Première page de test"
-            "Test1": "Test 1 - Première page de test"
-        ];
-        // Log init
-        this.log = new Log();
-        // Service worker registration
-        if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('/service-worker.js');
-        }
-    }
+import { createRouter } from "./router.js";
+import { createState } from "./state.js";
+import { createApi } from "./api.js";
+import { createOddsStream } from "./realtime.js";
+import { renderHome } from "./views/home.js";
+import { renderLogin } from "./views/login.js";
+import { renderSignup } from "./views/signup.js";
+import { renderNotFound } from "./views/not-found.js";
 
-    refresh() {
-        // Calls refresh on the page
-        this.pages[this.currentPage].refresh();
-    }
-
-    changePage(newPageName) {
-        if (this.pages[newPageName]) {
-            if (!this.currentPage == newPageName) {
-                // Close old page
-                this.pages[this.currentPage].close();
-                //  Update current page
-                this.currentPage = newPageName;
-                // Open new page
-                this.pages[this.currentPage].init();
-            } else{
-                // Dumbass calls changePage instead of refresh. Unacceptable.
-                app.log.write("Error while changing page, same page requested as the current page.", "error");
-            }
-        } else { app.log.write("Error while changing page, this page does not exist: " + String(newPageName), "error"); }
-    }
-
-    exit() {
-        // We close the current page and bail out
-        this.pages[this.currentPage].close();
-        app.log.write("Bye bye, exit() on app.js requested.");
-    }
+const viewRoot = document.querySelector("#view");
+const statusEl = document.querySelector("[data-auth-status]");
+const rawApiBase = document.querySelector("meta[name=api-base]")?.content?.trim();
+let apiBase = rawApiBase || window.location.origin;
+if (apiBase.startsWith("/")) {
+    apiBase = `${window.location.origin}${apiBase}`;
 }
+
+const state = createState();
+const api = createApi({ baseUrl: apiBase, state });
+let cleanupView = null;
+
+const updateStatus = () => {
+    if (!statusEl) return;
+    statusEl.textContent = state.token ? "Signed in" : "Guest";
+};
+
+const updateActiveLinks = (path) => {
+    const navLinks = document.querySelectorAll("a[data-link]");
+    navLinks.forEach((link) => {
+        const url = new URL(link.href);
+        if (url.pathname === path) {
+            link.setAttribute("aria-current", "page");
+        } else {
+            link.removeAttribute("aria-current");
+        }
+    });
+};
+
+const routes = {
+    "/": renderHome,
+    "/login": renderLogin,
+    "/signup": renderSignup,
+    "/not-found": renderNotFound
+};
+
+createRouter({
+    routes,
+    onRoute: (path, view, navigate) => {
+        if (cleanupView) {
+            cleanupView();
+            cleanupView = null;
+        }
+        if (typeof view === "function") {
+            cleanupView = view(viewRoot, { api, state, updateStatus, path, navigate }) || null;
+        }
+        document.title = path === "/" ? "Efrei.app" : `Efrei.app · ${path.replace("/", "")}`;
+        updateStatus();
+        updateActiveLinks(path);
+    }
+});
+
+const registerServiceWorker = () => {
+    if (!("serviceWorker" in navigator)) return;
+    window.addEventListener("load", () => {
+        navigator.serviceWorker.register("/sw.js").catch(() => {});
+    });
+};
+
+const setupRealtime = () => {
+    const wsBase = apiBase.replace(/^http/, "ws");
+    const stream = createOddsStream({
+        url: `${wsBase}/ws/odds`,
+        onStatus: (status) => state.setOddsStatus(status),
+        onMessage: (payload) => {
+            if (payload?.type === "odds" && Array.isArray(payload.events)) {
+                state.setOdds(payload.events);
+            }
+        }
+    });
+    stream.connect();
+};
+
+state.subscribe(updateStatus);
+registerServiceWorker();
+setupRealtime();
