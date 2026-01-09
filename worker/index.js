@@ -1,5 +1,6 @@
 // Worker service: publishes odds and processes payout jobs.
 const http = require("http");
+const jwt = require("jsonwebtoken");
 const mysql = require("mysql2/promise");
 const { createClient } = require("redis");
 const pino = require("pino");
@@ -28,23 +29,36 @@ const payoutDelayedSetName = process.env.PAYOUT_DELAYED_SET || "payout_jobs_dela
 const payoutDeadLetterQueueName = process.env.PAYOUT_DEAD_LETTER_QUEUE || "payout_jobs_dead";
 const metricsPort = Number(process.env.METRICS_PORT || 9102);
 const logLevel = process.env.LOG_LEVEL || "info";
+const jwtSecret = process.env.JWT_SECRET;
+const jwtIssuer = process.env.JWT_ISSUER || "efrei.app";
+const jwtAudience = process.env.JWT_AUDIENCE || "efrei.app";
+const hasJwtSecret = Boolean(jwtSecret && jwtSecret !== "change-me" && jwtSecret !== "dev-secret");
 
 // MySQL configuration.
-const dbHost = process.env.DB_HOST || "mysql";
+const dbHost = process.env.DB_HOST;
 const dbPort = Number(process.env.DB_PORT || 3306);
-const dbName = process.env.DB_NAME || "efrei";
-const dbUser = process.env.DB_USER || "efrei";
-const dbPassword = process.env.DB_PASSWORD || "efrei";
+const dbName = process.env.DB_NAME;
+const dbUser = process.env.DB_USER;
+const dbPassword = process.env.DB_PASSWORD;
 
 let dbPool = null;
 let superAdminIdCache = null;
 let redisQueueClient = null;
+let jwtSecretsCache = { secrets: null, fetchedAt: 0 };
 
 const logger = pino({
   level: logLevel,
   base: { service: "worker" },
   timestamp: pino.stdTimeFunctions.isoTime
 });
+
+if (!dbHost || !dbName || !dbUser || !dbPassword) {
+  throw new Error("DB_HOST, DB_NAME, DB_USER, and DB_PASSWORD must be set.");
+}
+
+if (!hasJwtSecret) {
+  logger.warn("JWT_SECRET missing or default; metrics auth will rely on auth_secrets.");
+}
 
 const metricsRegistry = new promClient.Registry();
 promClient.collectDefaultMetrics({ register: metricsRegistry, prefix: "worker_" });
@@ -77,6 +91,94 @@ const payoutQueueDepth = new promClient.Gauge({
 });
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const parsePositiveInt = (value) => {
+  const numberValue = Number(value);
+  if (!Number.isSafeInteger(numberValue) || numberValue <= 0) {
+    return null;
+  }
+  return numberValue;
+};
+
+const loadJwtSecrets = async () => {
+  const now = Date.now();
+  if (jwtSecretsCache.secrets && now - jwtSecretsCache.fetchedAt < 60 * 1000) {
+    return jwtSecretsCache;
+  }
+  const [rows] = await dbPool.query(
+    "SELECT secret, expires_at AS expiresAt FROM auth_secrets"
+  );
+  const valid = rows
+    .filter((row) => !row.expiresAt || new Date(row.expiresAt).getTime() > Date.now())
+    .map((row) => row.secret)
+    .filter(Boolean);
+  if (hasJwtSecret && !valid.includes(jwtSecret)) {
+    valid.push(jwtSecret);
+  }
+  jwtSecretsCache = { secrets: valid, fetchedAt: now };
+  return jwtSecretsCache;
+};
+
+const getJwtSecrets = async () => {
+  try {
+    const { secrets } = await loadJwtSecrets();
+    if (secrets && secrets.length > 0) {
+      return secrets;
+    }
+  } catch (error) {
+    logger.error({ err: error }, "JWT secret lookup failed");
+  }
+  return hasJwtSecret ? [jwtSecret] : [];
+};
+
+const fetchUserPermissions = async (userId, connection = dbPool) => {
+  const [rows] = await connection.query(
+    `SELECT DISTINCT p.name
+     FROM user_roles ur
+     JOIN role_permissions rp ON rp.role_id = ur.role_id
+     JOIN permissions p ON p.id = rp.permission_id
+     WHERE ur.user_id = ?`,
+    [userId]
+  );
+  return rows.map((row) => row.name);
+};
+
+const authenticateMetricsRequest = async (req) => {
+  const authHeader = req.headers.authorization || "";
+  if (!authHeader.startsWith("Bearer ")) {
+    return { ok: false, status: 401, message: "Missing bearer token." };
+  }
+  const token = authHeader.slice("Bearer ".length).trim();
+  const secrets = await getJwtSecrets();
+  if (!secrets.length) {
+    return { ok: false, status: 503, message: "Metrics auth not configured." };
+  }
+  let payload = null;
+  for (const secret of secrets) {
+    try {
+      payload = jwt.verify(token, secret, {
+        algorithms: ["HS256"],
+        issuer: jwtIssuer,
+        audience: jwtAudience
+      });
+      break;
+    } catch (error) {
+      // try next secret
+    }
+  }
+  if (!payload) {
+    return { ok: false, status: 401, message: "Invalid or expired token." };
+  }
+  const userId = parsePositiveInt(payload?.sub);
+  if (!userId) {
+    return { ok: false, status: 401, message: "Invalid token subject." };
+  }
+  const permissions = await fetchUserPermissions(userId);
+  if (!permissions.includes("admin.access")) {
+    return { ok: false, status: 403, message: "Admin access required." };
+  }
+  return { ok: true };
+};
 
 const calculateBackoffMs = (attempt) => {
   const exponent = Math.max(0, Number(attempt) - 1);
@@ -569,10 +671,15 @@ const initDatabase = async () => {
 const waitForSchema = async () => {
   const requiredTables = [
     "audit_logs",
+    "auth_secrets",
     "bet_options",
     "bet_positions",
     "bets",
     "payout_jobs",
+    "permissions",
+    "role_permissions",
+    "roles",
+    "user_roles",
     "users"
   ];
   const maxAttempts = 20;
@@ -600,6 +707,20 @@ const waitForSchema = async () => {
 const startMetricsServer = () => {
   const server = http.createServer(async (req, res) => {
     if (req.url === "/metrics") {
+      let authResult;
+      try {
+        authResult = await authenticateMetricsRequest(req);
+      } catch (error) {
+        logger.error({ err: error }, "Metrics auth failed");
+        res.writeHead(500, { "Content-Type": "text/plain" });
+        res.end("Metrics auth failed.");
+        return;
+      }
+      if (!authResult.ok) {
+        res.writeHead(authResult.status, { "Content-Type": "text/plain" });
+        res.end(authResult.message);
+        return;
+      }
       res.writeHead(200, { "Content-Type": metricsRegistry.contentType });
       res.end(await metricsRegistry.metrics());
       return;

@@ -22,12 +22,35 @@ const port = process.env.PORT || 4000;
 const jwtSecret = process.env.JWT_SECRET;
 const logLevel = process.env.LOG_LEVEL || "info";
 const trustProxy = process.env.TRUST_PROXY || "loopback, linklocal, uniquelocal";
+const jwtIssuer = process.env.JWT_ISSUER || "efrei.app";
+const jwtAudience = process.env.JWT_AUDIENCE || "efrei.app";
+const corsOriginsRaw = process.env.CORS_ORIGINS || "";
+const corsOrigins = corsOriginsRaw
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+const corsAllowAll = corsOrigins.includes("*");
 
 if (!jwtSecret || jwtSecret === "change-me" || jwtSecret === "dev-secret") {
   throw new Error("JWT_SECRET must be set to a non-default value.");
 }
 
 app.set("trust proxy", trustProxy);
+
+const corsOptions = {
+  origin: (origin, callback) => {
+    if (!origin) {
+      return callback(null, true);
+    }
+    if (corsAllowAll) {
+      return callback(null, true);
+    }
+    if (!corsOrigins.length) {
+      return callback(null, false);
+    }
+    return callback(null, corsOrigins.includes(origin));
+  }
+};
 
 // Redis configuration for realtime odds.
 const redisHost = process.env.REDIS_HOST || "redis";
@@ -40,11 +63,15 @@ const payoutMaxAttempts = Number.isFinite(payoutMaxAttemptsRaw) && payoutMaxAtte
   : 5;
 
 // MySQL configuration for users, offers, bets, and points.
-const dbHost = process.env.DB_HOST || "mysql";
+const dbHost = process.env.DB_HOST;
 const dbPort = Number(process.env.DB_PORT || 3306);
-const dbName = process.env.DB_NAME || "efrei";
-const dbUser = process.env.DB_USER || "efrei";
-const dbPassword = process.env.DB_PASSWORD || "efrei";
+const dbName = process.env.DB_NAME;
+const dbUser = process.env.DB_USER;
+const dbPassword = process.env.DB_PASSWORD;
+
+if (!dbHost || !dbName || !dbUser || !dbPassword) {
+  throw new Error("DB_HOST, DB_NAME, DB_USER, and DB_PASSWORD must be set.");
+}
 
 let dbPool = null;
 let jwtSecretsCache = { secrets: null, primary: null, fetchedAt: 0 };
@@ -102,7 +129,7 @@ let latestOdds = {
 };
 
 // Allow browser calls from the frontend and parse JSON bodies.
-app.use(cors());
+app.use(cors(corsOptions));
 app.use(express.json());
 app.use((req, res, next) => {
   const incomingId = req.headers["x-request-id"];
@@ -491,10 +518,6 @@ registerRoute({
     }
   }
 });
-app.get("/metrics", async (req, res) => {
-  res.setHeader("Content-Type", metricsRegistry.contentType);
-  res.send(await metricsRegistry.metrics());
-});
 
 // Placeholder endpoint for future business logic.
 registerRoute({
@@ -684,12 +707,12 @@ const fetchUserById = async (userId, connection = dbPool) => {
   if (!rows[0]) {
     return null;
   }
-  const userId = Number(rows[0].id);
-  const permissions = await fetchUserPermissions(userId, connection);
+  const resolvedUserId = Number(rows[0].id);
+  const permissions = await fetchUserPermissions(resolvedUserId, connection);
   const isAdmin = permissions.includes("admin.access");
   const isSuperAdmin = permissions.includes("admin.super");
   return {
-    id: userId,
+    id: resolvedUserId,
     email: rows[0].email,
     name: rows[0].name,
     points: Number(rows[0].points),
@@ -903,7 +926,11 @@ const verifyJwtToken = async (token) => {
   const secrets = await getJwtSecrets();
   for (const secret of secrets) {
     try {
-      return jwt.verify(token, secret);
+      return jwt.verify(token, secret, {
+        algorithms: ["HS256"],
+        issuer: jwtIssuer,
+        audience: jwtAudience
+      });
     } catch (error) {
       // try next secret
     }
@@ -1255,8 +1282,7 @@ const authenticate = async (req, res, next) => {
     req.user = user;
     return next();
   } catch (error) {
-    req.user = null;
-    return next();
+    return res.status(401).json({ ok: false, message: "Invalid or expired token." });
   }
 };
 
@@ -1285,6 +1311,11 @@ const requirePermission = (permission) => (req, res, next) => {
 
 const requireAdmin = requirePermission("admin.access");
 const requireSuperAdmin = requirePermission("admin.super");
+
+app.get("/metrics", authenticate, requireAdmin, async (req, res) => {
+  res.setHeader("Content-Type", metricsRegistry.contentType);
+  res.send(await metricsRegistry.metrics());
+});
 
 // User endpoints (points never drop below 0).
 registerRoute({

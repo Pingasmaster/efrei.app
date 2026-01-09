@@ -101,7 +101,8 @@ require_url BUSINESS_API_URL
 require_value DB_HOST
 require_port DB_PORT
 require_value DB_NAME
-require_value DB_USER
+require_not_default DB_USER "change-me-user"
+require_not_default DB_PASSWORD "change-me-password"
 require_not_default DB_PASSWORD "change-me"
 require_not_default MYSQL_ROOT_PASSWORD "change-me-root"
 

@@ -21,14 +21,14 @@ Services principaux (conteneurs Docker) :
   - Détection d’appareils (empreinte) et stockage dans `user_devices`.
   - Proxy HTTP `/api/*` et WebSocket `/ws/*` vers l’API métier.
   - RBAC (permissions) pour les contrôles admin/super admin.
-  - Expose `/health` et `/metrics` (Prometheus).
+  - Expose `/health` et `/metrics` (Prometheus, **admin uniquement**).
   - Émet des logs JSON structurés (Pino).
 - **api** (Express) :
   - Logique métier (offres, paris, transferts de points, admin, audit logs).
   - OpenAPI auto-généré (`/openapi.json`) + Swagger UI (`/docs`).
   - Idempotency keys pour les endpoints sensibles.
   - WebSocket odds `/ws/odds` + endpoint `/odds`.
-  - Expose `/health` et `/metrics` (Prometheus).
+  - Expose `/health` et `/metrics` (Prometheus, **admin uniquement**).
   - Émet des logs JSON structurés (Pino).
   - Initialise le schéma MySQL (mode dev) via `ensureSchema` avec retries si MySQL n’est pas encore prêt (FK/DB manquants).
 - **mysql** : persistance des utilisateurs, paris, offres, tokens, audit logs, jobs de payout.
@@ -40,10 +40,10 @@ Services principaux (conteneurs Docker) :
   - Consomme la queue `payout_jobs`, applique les payouts et les fees.
   - Retry/backoff avec `PAYOUT_DELAYED_SET` + dead-letter queue `PAYOUT_DEAD_LETTER_QUEUE`.
   - Attend la disponibilité des tables MySQL avant de démarrer les traitements.
-  - Expose `/metrics` sur `METRICS_PORT` (Prometheus) + logs JSON.
+  - Expose `/metrics` sur `METRICS_PORT` (Prometheus, **admin uniquement**) + logs JSON.
 
 Observability (inclus dans `docker-compose.yml`) :
-- **prometheus** : scrape `/metrics` (gateway/api/worker), stocke les séries temporelles, alimente les alertes.
+- **prometheus** : scrape `/metrics` (gateway/api/worker) **avec token admin**, stocke les séries temporelles, alimente les alertes.
 - **alertmanager** : reçoit et distribue les alertes Prometheus (config simple par défaut).
 - **loki** : stockage des logs structurés.
 - **promtail** : collecte les logs Docker et les pousse vers Loki.
@@ -69,8 +69,10 @@ Fichier `.env.example` :
   - `FRONTEND_PORT`, `GATEWAY_PORT`, `API_PORT`
 - **Gateway/API**
   - `JWT_SECRET` (sert à **amorcer** `auth_secrets` s’il est vide)
+  - `JWT_ISSUER`, `JWT_AUDIENCE` (optionnels, pour pinner les claims JWT)
   - `BUSINESS_API_URL` (gateway -> api)
   - `TRUST_PROXY` (optionnel, défaut `loopback, linklocal, uniquelocal`)
+  - `CORS_ORIGINS` (optionnel, allowlist CORS séparée par virgules)
 - **DB**
   - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `MYSQL_ROOT_PASSWORD`
 - **Redis**
@@ -90,7 +92,7 @@ Fichier `.env.example` :
 - **Super admin bootstrap**
   - `ADMIN_BOOTSTRAP_EMAIL` ou `ADMIN_BOOTSTRAP_USER_ID`
 
-**Important :** le gateway et l’API lisent leurs secrets depuis `auth_secrets`. `JWT_SECRET` sert uniquement de secret initial si la table est vide, **mais il doit être défini à une valeur non‑défaut** (les services échouent au démarrage sinon).
+**Important :** le gateway et l’API lisent leurs secrets depuis `auth_secrets`. `JWT_SECRET` sert uniquement de secret initial si la table est vide, **mais il doit être défini à une valeur non‑défaut** (les services échouent au démarrage sinon). Les variables DB (`DB_USER`, `DB_PASSWORD`) doivent aussi être définies à des valeurs non‑défaut (validation via `env-check`).
 
 ---
 
@@ -200,10 +202,11 @@ Append-only (aucun endpoint de suppression).
 
 ### JWT + refresh
 - **Access token JWT** (gateway) : durée **1h**.
+- **Claims JWT** : `issuer`/`audience` sont vérifiés (HS256 uniquement).
 - **Refresh token** : stocké hashé en DB, **rotated** à chaque refresh.
 - **Refresh token lié au device** : `refresh_tokens.device_id` permet d’identifier le device d’origine et de révoquer un device ou une session spécifique.
 - **Rotation de secret** : endpoint admin dédié (gateway) => ancien secret reste valide pendant une période de grâce.
-- **Endpoints publics** : les routes en auth optionnelle tolèrent un token invalide (le client est traité comme anonyme).
+- **Endpoints publics** : un token invalide renvoie **401** (le client doit refresh/rotater).
 
 ### Rôles
 - **Super admin** :
@@ -335,7 +338,7 @@ Endpoint dédié : `GET /admin/logs`
 
 ### GET `/metrics`
 **But :** Expose les métriques Prometheus du gateway.
-- Restriction: publique (à limiter via réseau en prod)
+- Restriction: **admin uniquement** (`Authorization: Bearer <token>`)
 
 ### Proxy
 - `/api/*` -> API métier
@@ -360,7 +363,7 @@ Toutes les routes sensibles exigent:
 
 #### GET `/metrics`
 **But :** Expose les métriques Prometheus de l’API.
-- Restriction: publique (à limiter via réseau en prod)
+- Restriction: **admin uniquement** (`Authorization: Bearer <token>`)
 
 #### GET `/odds`
 **But :** Dernier snapshot des cotes.
@@ -736,9 +739,9 @@ Toutes les routes sensibles exigent:
 - **Logs structurés** JSON (Pino) dans `gateway`, `api`, `odds-worker`.
 - **Trace ID** : le gateway génère un `X-Request-Id` et le propage à l’API.
 - **Metrics Prometheus** :
-  - Gateway : `/metrics` (port `GATEWAY_PORT`)
-  - API : `/metrics` (port `API_PORT`)
-  - Worker : `/metrics` (port `METRICS_PORT`)
+  - Gateway : `/metrics` (port `GATEWAY_PORT`) **admin uniquement**
+  - API : `/metrics` (port `API_PORT`) **admin uniquement**
+  - Worker : `/metrics` (port `METRICS_PORT`) **admin uniquement**
 - **Stack intégrée** (définie dans `docker-compose.yml`) :
   - Prometheus (scrape + rules), Alertmanager (alert routing)
   - Loki (stockage logs), Promtail (collecte logs Docker)

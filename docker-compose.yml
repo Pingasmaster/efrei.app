@@ -33,8 +33,11 @@ services:
     environment:
       PORT: "${GATEWAY_PORT}"
       JWT_SECRET: "${JWT_SECRET}"
+      JWT_ISSUER: "${JWT_ISSUER}"
+      JWT_AUDIENCE: "${JWT_AUDIENCE}"
       BUSINESS_API_URL: "${BUSINESS_API_URL}"
       LOG_LEVEL: "${LOG_LEVEL}"
+      CORS_ORIGINS: "${CORS_ORIGINS}"
       ADMIN_BOOTSTRAP_EMAIL: "${ADMIN_BOOTSTRAP_EMAIL}"
       ADMIN_BOOTSTRAP_USER_ID: "${ADMIN_BOOTSTRAP_USER_ID}"
       REFRESH_TOKEN_DAYS: "${REFRESH_TOKEN_DAYS}"
@@ -67,7 +70,10 @@ services:
     environment:
       PORT: "${API_PORT}"
       JWT_SECRET: "${JWT_SECRET}"
+      JWT_ISSUER: "${JWT_ISSUER}"
+      JWT_AUDIENCE: "${JWT_AUDIENCE}"
       LOG_LEVEL: "${LOG_LEVEL}"
+      CORS_ORIGINS: "${CORS_ORIGINS}"
       ADMIN_BOOTSTRAP_EMAIL: "${ADMIN_BOOTSTRAP_EMAIL}"
       ADMIN_BOOTSTRAP_USER_ID: "${ADMIN_BOOTSTRAP_USER_ID}"
       PAYOUT_QUEUE: "${PAYOUT_QUEUE}"
@@ -122,6 +128,9 @@ services:
       context: .
       dockerfile: worker/Containerfile
     environment:
+      JWT_SECRET: "${JWT_SECRET}"
+      JWT_ISSUER: "${JWT_ISSUER}"
+      JWT_AUDIENCE: "${JWT_AUDIENCE}"
       DB_HOST: "${DB_HOST}"
       DB_PORT: "${DB_PORT}"
       DB_NAME: "${DB_NAME}"

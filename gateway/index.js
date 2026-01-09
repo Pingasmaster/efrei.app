@@ -19,6 +19,14 @@ const jwtSecret = process.env.JWT_SECRET;
 const businessApiUrl = process.env.BUSINESS_API_URL || "http://api:4000";
 const logLevel = process.env.LOG_LEVEL || "info";
 const trustProxy = process.env.TRUST_PROXY || "loopback, linklocal, uniquelocal";
+const jwtIssuer = process.env.JWT_ISSUER || "efrei.app";
+const jwtAudience = process.env.JWT_AUDIENCE || "efrei.app";
+const corsOriginsRaw = process.env.CORS_ORIGINS || "";
+const corsOrigins = corsOriginsRaw
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+const corsAllowAll = corsOrigins.includes("*");
 
 if (!jwtSecret || jwtSecret === "change-me" || jwtSecret === "dev-secret") {
   throw new Error("JWT_SECRET must be set to a non-default value.");
@@ -26,12 +34,31 @@ if (!jwtSecret || jwtSecret === "change-me" || jwtSecret === "dev-secret") {
 
 app.set("trust proxy", trustProxy);
 
+const corsOptions = {
+  origin: (origin, callback) => {
+    if (!origin) {
+      return callback(null, true);
+    }
+    if (corsAllowAll) {
+      return callback(null, true);
+    }
+    if (!corsOrigins.length) {
+      return callback(null, false);
+    }
+    return callback(null, corsOrigins.includes(origin));
+  }
+};
+
 // MySQL configuration (consumed from .env / docker-compose).
-const dbHost = process.env.DB_HOST || "mysql";
+const dbHost = process.env.DB_HOST;
 const dbPort = Number(process.env.DB_PORT || 3306);
-const dbName = process.env.DB_NAME || "efrei";
-const dbUser = process.env.DB_USER || "efrei";
-const dbPassword = process.env.DB_PASSWORD || "efrei";
+const dbName = process.env.DB_NAME;
+const dbUser = process.env.DB_USER;
+const dbPassword = process.env.DB_PASSWORD;
+
+if (!dbHost || !dbName || !dbUser || !dbPassword) {
+  throw new Error("DB_HOST, DB_NAME, DB_USER, and DB_PASSWORD must be set.");
+}
 const adminBootstrapEmailRaw = process.env.ADMIN_BOOTSTRAP_EMAIL;
 const adminBootstrapUserIdRaw = process.env.ADMIN_BOOTSTRAP_USER_ID;
 const refreshTokenDaysRaw = Number(process.env.REFRESH_TOKEN_DAYS || 30);
@@ -143,7 +170,7 @@ const authLimiter = createBackoffLimiter({
 });
 
 // Allow browser clients and parse JSON request bodies.
-app.use(cors());
+app.use(cors(corsOptions));
 app.use(express.json());
 app.use((req, res, next) => {
   const incomingId = req.headers["x-request-id"];
@@ -181,11 +208,6 @@ app.use(generalLimiter);
 // Basic health endpoint used by probes.
 app.get("/health", (req, res) => {
   res.json({ status: "ok", service: "gateway" });
-});
-
-app.get("/metrics", async (req, res) => {
-  res.setHeader("Content-Type", metricsRegistry.contentType);
-  res.send(await metricsRegistry.metrics());
 });
 
 const normalizeEmail = (email) => String(email || "").trim().toLowerCase();
@@ -474,14 +496,23 @@ const getJwtSecrets = async () => {
 
 const signJwt = async (payload) => {
   const { primary } = await getJwtSecrets();
-  return jwt.sign(payload, primary, { expiresIn: "1h" });
+  return jwt.sign(payload, primary, {
+    expiresIn: "1h",
+    algorithm: "HS256",
+    issuer: jwtIssuer,
+    audience: jwtAudience
+  });
 };
 
 const verifyJwt = async (token) => {
   const { secrets } = await getJwtSecrets();
   for (const secret of secrets) {
     try {
-      return jwt.verify(token, secret);
+      return jwt.verify(token, secret, {
+        algorithms: ["HS256"],
+        issuer: jwtIssuer,
+        audience: jwtAudience
+      });
     } catch (error) {
       // try next secret
     }
@@ -627,6 +658,11 @@ const requireSuperAdmin = (req, res, next) => {
   }
   return next();
 };
+
+app.get("/metrics", authenticateToken, requireAdmin, async (req, res) => {
+  res.setHeader("Content-Type", metricsRegistry.contentType);
+  res.send(await metricsRegistry.metrics());
+});
 
 const waitForSchema = async () => {
   const requiredTables = [
