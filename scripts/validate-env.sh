@@ -94,6 +94,7 @@ require_port API_PORT
 
 # Gateway and auth configuration.
 require_not_default JWT_SECRET "change-me"
+require_not_default JWT_SECRET "dev-secret"
 require_url BUSINESS_API_URL
 
 # Database settings.

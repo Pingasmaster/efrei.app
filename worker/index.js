@@ -390,7 +390,7 @@ const processPayoutJob = async (jobId) => {
     payoutJobAttemptsTotal.inc({ status: "started" });
 
     const betId = Number(job.bet_id);
-    const resultOptionId = Number(job.result_option_id || 0);
+    const resultOptionId = Number(job.result_option_id);
     if (!betId || !resultOptionId) {
       throw new Error("Missing bet_id or result_option_id");
     }
@@ -528,9 +528,7 @@ const listenToQueue = async (queueClient) => {
       const result = await queueClient.brPop(payoutQueueName, 0);
       if (result && result.element) {
         const jobId = Number(result.element);
-        if (Number.isFinite(jobId) && jobId > 0) {
-          await processPayoutJob(jobId);
-        }
+        await processPayoutJob(jobId);
       }
     } catch (error) {
       logger.error({ err: error }, "Queue listener error");

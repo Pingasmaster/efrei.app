@@ -1,13 +1,15 @@
 export const createState = () => {
     const tokenKey = "efrei_token";
+    const refreshTokenKey = "efrei_refresh_token";
     let token = localStorage.getItem(tokenKey);
+    let refreshToken = localStorage.getItem(refreshTokenKey);
     let odds = [];
     let betslip = [];
     let oddsStatus = "offline";
     const listeners = new Set();
 
     const notify = () => {
-        const snapshot = { token, odds, betslip, oddsStatus };
+        const snapshot = { token, refreshToken, odds, betslip, oddsStatus };
         listeners.forEach((listener) => listener(snapshot));
     };
 
@@ -21,7 +23,22 @@ export const createState = () => {
         notify();
     };
 
+    const setRefreshToken = (nextToken) => {
+        refreshToken = nextToken;
+        if (refreshToken) {
+            localStorage.setItem(refreshTokenKey, refreshToken);
+        } else {
+            localStorage.removeItem(refreshTokenKey);
+        }
+        notify();
+    };
+
     const clearToken = () => setToken(null);
+    const clearRefreshToken = () => setRefreshToken(null);
+    const clearAuth = () => {
+        setToken(null);
+        setRefreshToken(null);
+    };
 
     const setOdds = (nextOdds) => {
         odds = Array.isArray(nextOdds) ? nextOdds : [];
@@ -52,13 +69,16 @@ export const createState = () => {
 
     const subscribe = (listener) => {
         listeners.add(listener);
-        listener({ token, odds, betslip, oddsStatus });
+        listener({ token, refreshToken, odds, betslip, oddsStatus });
         return () => listeners.delete(listener);
     };
 
     return {
         get token() {
             return token;
+        },
+        get refreshToken() {
+            return refreshToken;
         },
         get odds() {
             return odds;
@@ -70,7 +90,10 @@ export const createState = () => {
             return oddsStatus;
         },
         setToken,
+        setRefreshToken,
         clearToken,
+        clearRefreshToken,
+        clearAuth,
         setOdds,
         setOddsStatus,
         addSlip,

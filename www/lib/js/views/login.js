@@ -68,6 +68,9 @@ export const renderLogin = (root, { api, state, updateStatus, navigate }) => {
             if (data?.token) {
                 state.setToken(data.token);
             }
+            if (data?.refreshToken && typeof state.setRefreshToken === "function") {
+                state.setRefreshToken(data.refreshToken);
+            }
             setStatus("Signed in successfully.", "success");
             updateStatus();
             if (typeof navigate === "function") {

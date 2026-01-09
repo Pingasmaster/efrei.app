@@ -203,7 +203,7 @@ app.use(apiLimiter);
 
 const parsePositiveInt = (value) => {
   const numberValue = Number(value);
-  if (!Number.isInteger(numberValue) || numberValue <= 0) {
+  if (!Number.isSafeInteger(numberValue) || numberValue <= 0) {
     return null;
   }
   return numberValue;
@@ -561,11 +561,11 @@ const withIdempotency = (routeKey, handler) => async (req, res) => {
        FOR UPDATE`,
       [idemKey, userId, routeKey, req.method]
     );
-    if (rows.length) {
-      const record = rows[0];
+    const handleExisting = async (record) => {
       if (record.requestHash !== requestHash) {
         await connection.rollback();
-        return res.status(409).json({ ok: false, message: "Idempotency key already used with different payload." });
+        res.status(409).json({ ok: false, message: "Idempotency key already used with different payload." });
+        return true;
       }
       if (record.status === "completed" && record.responseStatus) {
         await connection.rollback();
@@ -575,18 +575,45 @@ const withIdempotency = (routeKey, handler) => async (req, res) => {
         } catch (error) {
           body = { ok: false, message: "Failed to decode idempotent response." };
         }
-        return res.status(record.responseStatus).json(body);
+        res.status(record.responseStatus).json(body);
+        return true;
       }
       if (record.status === "processing") {
         await connection.rollback();
-        return res.status(409).json({ ok: false, message: "Request already in progress." });
+        res.status(409).json({ ok: false, message: "Request already in progress." });
+        return true;
+      }
+      return false;
+    };
+
+    if (rows.length) {
+      const record = rows[0];
+      if (await handleExisting(record)) {
+        return;
+      }
+    } else {
+      try {
+        await connection.query(
+          `INSERT INTO idempotency_keys (idem_key, user_id, route, method, request_hash, status)
+           VALUES (?, ?, ?, ?, ?, 'processing')`,
+          [idemKey, userId, routeKey, req.method, requestHash]
+        );
+      } catch (error) {
+        if (error && error.code === "ER_DUP_ENTRY") {
+          const [dupRows] = await connection.query(
+            `SELECT id, request_hash AS requestHash, status, response_status AS responseStatus, response_body AS responseBody
+             FROM idempotency_keys
+             WHERE idem_key = ? AND user_id = ? AND route = ? AND method = ?
+             FOR UPDATE`,
+            [idemKey, userId, routeKey, req.method]
+          );
+          if (dupRows.length && await handleExisting(dupRows[0])) {
+            return;
+          }
+        }
+        throw error;
       }
     }
-    await connection.query(
-      `INSERT INTO idempotency_keys (idem_key, user_id, route, method, request_hash, status)
-       VALUES (?, ?, ?, ?, ?, 'processing')`,
-      [idemKey, userId, routeKey, req.method, requestHash]
-    );
     await connection.commit();
   } catch (error) {
     await connection.rollback();
@@ -657,11 +684,12 @@ const fetchUserById = async (userId, connection = dbPool) => {
   if (!rows[0]) {
     return null;
   }
-  const permissions = await fetchUserPermissions(Number(rows[0].id), connection);
+  const userId = Number(rows[0].id);
+  const permissions = await fetchUserPermissions(userId, connection);
   const isAdmin = permissions.includes("admin.access");
   const isSuperAdmin = permissions.includes("admin.super");
   return {
-    id: Number(rows[0].id),
+    id: userId,
     email: rows[0].email,
     name: rows[0].name,
     points: Number(rows[0].points),
@@ -3518,7 +3546,7 @@ registerRoute({
 });
 app.get(
   "/offers/:id/acceptances",
-  optionalAuthenticate,
+  authenticate,
   validateRequest(z.object({ params: z.object({ id: zId }), query: z.object({}), body: z.object({}).default({}) })),
   async (req, res) => {
   const offerId = parsePositiveInt(req.params.id);
@@ -3531,8 +3559,15 @@ app.get(
       return res.status(404).json({ ok: false, message: "Offer not found." });
     }
     const offer = offerRows[0];
-    const canAccess = await canAccessGroupResource(offer.group_id, req.user);
-    if (!canAccess && (!req.user || !req.user.isAdmin) && req.user?.id !== Number(offer.creator_user_id)) {
+    const creatorUserId = Number(offer.creator_user_id);
+    const isCreator = req.user.id === creatorUserId;
+    const isAdmin = req.user.isAdmin;
+    let isGroupMember = false;
+    if (offer.group_id !== null) {
+      const groupId = Number(offer.group_id);
+      isGroupMember = await isUserInGroup(req.user.id, groupId);
+    }
+    if (!isAdmin && !isCreator && !isGroupMember) {
       return res.status(403).json({ ok: false, message: "Access denied." });
     }
     const [rows] = await dbPool.query(
@@ -3723,7 +3758,8 @@ app.post(
       return res.status(409).json({ ok: false, message: "Offer has reached its maximum acceptances." });
     }
 
-    if (Number(offer.creator_user_id) === accepterUserId) {
+    const creatorUserId = Number(offer.creator_user_id);
+    if (creatorUserId === accepterUserId) {
       await connection.rollback();
       return res.status(400).json({ ok: false, message: "Creator cannot accept their own offer." });
     }
@@ -3746,7 +3782,7 @@ app.post(
       });
       accepterPoints = debitResult.after;
       const creditResult = await applyPointsDelta(connection, {
-        userId: Number(offer.creator_user_id),
+        userId: creatorUserId,
         delta: cost,
         actorUserId: accepterUserId,
         action: "offer_accept_credit",
@@ -3804,7 +3840,7 @@ app.post(
       fee,
       totalCost,
       accepterPoints,
-      creatorUserId: offer.creator_user_id,
+      creatorUserId,
       creatorPoints
     });
   } catch (error) {
@@ -4423,8 +4459,8 @@ app.post(
     })
   ),
   withIdempotency("bet_sell", async (req, res) => {
-    const betId = Number(req.params.id);
-    const positionId = Number(req.body.positionId);
+    const betId = parsePositiveInt(req.params.id);
+    const positionId = parsePositiveInt(req.body.positionId);
     if (!betId || !positionId) {
       return res.status(400).json({ ok: false, message: "bet id and positionId are required." });
     }

@@ -1,6 +1,6 @@
 # efrei.app
 
-C'est le meileur site web de paris pour tout ce qui se passe à l'efrei.
+C'est LE site de paris pour tout ce qui se passe à l'efrei.
 
 Pariez avec des points, et echangez-les entre élèves ou pour des récompenses.
 
@@ -13,7 +13,7 @@ Ce projet comporte quatre conteneurs qui s'occupent de tout:
 5. Cache (Bonus): Redis est utilisé pour cacher la DB.
 6. Odds Worker (Bonus): Publies les côtes en temps réel vers redis pour le streaming en temps réel.
 
-Tous les conteneurs utilisent le network interne "internal" de docker. POur lancer tout le projet il suffit de faire:
+Tous les conteneurs utilisent le network interne "internal" de docker. Pour lancer tout le projet il suffit de faire:
 
 ## Lancement de l'app
 
@@ -25,25 +25,13 @@ nano .env # Mettre les mots de passe requis
 docker compose up --build
 ```
 
-Pour tous lers lancement suivants on peut juste faire:
+Pour tous les lancement suivants on peut juste faire:
 
 ```bash
 docker compose up --build
 ```
 
-Les urls sont http://localhost:8080 pour le frontend, http://localhost:3000 pour la gateway et http://api:4000 pour l'api métier.
-
-## Observability (logs + metrics + alerting)
-Une stack optionnelle Prometheus + Alertmanager + Loki + Promtail est fournie. Pour la lancer:
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.observability.yml up --build
-```
-
-Endpoints utiles:
-- Prometheus: http://localhost:9090
-- Alertmanager: http://localhost:9093
-- Loki: http://localhost:3100
+Une stack d'observabilité Prometheus + Alertmanager + Loki + Promtail est fournie. Les urls sont http://localhost:8080 pour le frontend, http://localhost:3000 pour la gateway et http://api:4000 pour l'api métier, et http://localhost:9090 pour Prometheus, http://localhost:9093 pour Alertmanager, http://localhost:3100 pour Loki.
 
 Les métriques sont exposées sur `/metrics` (gateway + api) et `METRICS_PORT` (worker).
 

@@ -20,7 +20,7 @@ Services principaux (conteneurs Docker) :
   - Authentification (`/auth/*`) avec JWT + refresh tokens.
   - Détection d’appareils (empreinte) et stockage dans `user_devices`.
   - Proxy HTTP `/api/*` et WebSocket `/ws/*` vers l’API métier.
-  - Cache auth via Redis (si disponible) et RBAC (permissions).
+  - RBAC (permissions) pour les contrôles admin/super admin.
   - Expose `/health` et `/metrics` (Prometheus).
   - Émet des logs JSON structurés (Pino).
 - **api** (Express) :
@@ -34,7 +34,6 @@ Services principaux (conteneurs Docker) :
 - **mysql** : persistance des utilisateurs, paris, offres, tokens, audit logs, jobs de payout.
 - **redis** :
   - Pub/Sub odds (realtime) pour l’API.
-  - Cache auth côté gateway.
   - Queue Redis pour les payouts (`PAYOUT_QUEUE`) + retry delayed set + dead-letter queue.
 - **odds-worker** :
   - Publie des cotes aléatoires vers Redis (`ODDS_CHANNEL`) à intervalle fixe.
@@ -43,7 +42,7 @@ Services principaux (conteneurs Docker) :
   - Attend la disponibilité des tables MySQL avant de démarrer les traitements.
   - Expose `/metrics` sur `METRICS_PORT` (Prometheus) + logs JSON.
 
-Observability (optionnel, `docker-compose.observability.yml`) :
+Observability (inclus dans `docker-compose.yml`) :
 - **prometheus** : scrape `/metrics` (gateway/api/worker), stocke les séries temporelles, alimente les alertes.
 - **alertmanager** : reçoit et distribue les alertes Prometheus (config simple par défaut).
 - **loki** : stockage des logs structurés.
@@ -85,8 +84,6 @@ Fichier `.env.example` :
   - `PAYOUT_DELAYED_SET` (ZSET des retries), `PAYOUT_DEAD_LETTER_QUEUE` (DLQ)
 - **Refresh tokens**
   - `REFRESH_TOKEN_DAYS`
-- **Auth cache (gateway)**
-  - `AUTH_CACHE_TTL_SECONDS`
 - **Observability**
   - `LOG_LEVEL` (Pino)
   - `METRICS_PORT` (worker)
@@ -231,6 +228,7 @@ Append-only (aucun endpoint de suppression).
 - Empreinte d’appareil (`user_devices`) à la connexion/inscription.
 - Audit `auth_new_device` si un device inédit est détecté.
 - Si un device est révoqué (`revoked_at`), le gateway bloque les logins depuis ce device.
+- Les access tokens incluent `deviceId` et sont refusés si le device a été révoqué.
 
 ### Profils & visibilité
 - Un profil peut être **public** ou **privé**.
@@ -574,7 +572,7 @@ Toutes les routes sensibles exigent:
 
 #### GET `/offers/:id/acceptances`
 **But :** Voir acceptations.
-- Restriction: publique
+- Restriction: authentifié (créateur ou admin ; membres du groupe si offre privée)
 
 #### GET `/offers/:id/reviews`
 **But :** Voir reviews.
@@ -741,7 +739,7 @@ Toutes les routes sensibles exigent:
   - Gateway : `/metrics` (port `GATEWAY_PORT`)
   - API : `/metrics` (port `API_PORT`)
   - Worker : `/metrics` (port `METRICS_PORT`)
-- **Stack optionnelle** (fichier `docker-compose.observability.yml`) :
+- **Stack intégrée** (définie dans `docker-compose.yml`) :
   - Prometheus (scrape + rules), Alertmanager (alert routing)
   - Loki (stockage logs), Promtail (collecte logs Docker)
 

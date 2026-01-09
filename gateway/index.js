@@ -8,7 +8,6 @@ const crypto = require("crypto");
 const rateLimitModule = require("express-rate-limit");
 const { z } = require("zod");
 const mysql = require("mysql2/promise");
-const { createClient: createRedisClient } = require("redis");
 const { createProxyMiddleware } = require("http-proxy-middleware");
 const pino = require("pino");
 const promClient = require("prom-client");
@@ -40,17 +39,7 @@ const refreshTokenDays = Number.isFinite(refreshTokenDaysRaw) && refreshTokenDay
   ? refreshTokenDaysRaw
   : 30;
 
-// Redis configuration for auth caching.
-const redisHost = process.env.REDIS_HOST || "redis";
-const redisPort = process.env.REDIS_PORT || "6379";
-const authCacheTtlSecondsRaw = Number(process.env.AUTH_CACHE_TTL_SECONDS || 300);
-const authCacheTtlSeconds =
-  Number.isFinite(authCacheTtlSecondsRaw) && authCacheTtlSecondsRaw > 0
-    ? authCacheTtlSecondsRaw
-    : 300;
-
 let dbPool = null;
-let redisClient = null;
 let jwtSecretsCache = { secrets: null, primary: null, fetchedAt: 0 };
 
 const logger = pino({
@@ -207,11 +196,12 @@ const recordAuthMetric = (action, status) => {
 
 const parsePositiveInt = (value) => {
   const numberValue = Number(value);
-  if (!Number.isInteger(numberValue) || numberValue <= 0) {
+  if (!Number.isSafeInteger(numberValue) || numberValue <= 0) {
     return null;
   }
   return numberValue;
 };
+
 
 const adminBootstrapEmail = adminBootstrapEmailRaw ? normalizeEmail(adminBootstrapEmailRaw) : null;
 const adminBootstrapUserId = adminBootstrapUserIdRaw ? parsePositiveInt(adminBootstrapUserIdRaw) : null;
@@ -327,46 +317,46 @@ const logPointChange = async (connection, {
   });
 };
 
-const ensureRole = async (name, description = null) => {
-  await dbPool.query("INSERT IGNORE INTO roles (name, description) VALUES (?, ?)", [name, description]);
-  const [rows] = await dbPool.query("SELECT id FROM roles WHERE name = ?", [name]);
+const ensureRole = async (name, description = null, connection = dbPool) => {
+  await connection.query("INSERT IGNORE INTO roles (name, description) VALUES (?, ?)", [name, description]);
+  const [rows] = await connection.query("SELECT id FROM roles WHERE name = ?", [name]);
   return rows[0]?.id;
 };
 
-const ensurePermission = async (name, description = null) => {
-  await dbPool.query("INSERT IGNORE INTO permissions (name, description) VALUES (?, ?)", [name, description]);
-  const [rows] = await dbPool.query("SELECT id FROM permissions WHERE name = ?", [name]);
+const ensurePermission = async (name, description = null, connection = dbPool) => {
+  await connection.query("INSERT IGNORE INTO permissions (name, description) VALUES (?, ?)", [name, description]);
+  const [rows] = await connection.query("SELECT id FROM permissions WHERE name = ?", [name]);
   return rows[0]?.id;
 };
 
-const ensureRolePermission = async (roleId, permissionId) => {
+const ensureRolePermission = async (roleId, permissionId, connection = dbPool) => {
   if (!roleId || !permissionId) return;
-  await dbPool.query(
+  await connection.query(
     "INSERT IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)",
     [roleId, permissionId]
   );
 };
 
-const ensureUserRole = async (userId, roleId, assignedBy = null) => {
+const ensureUserRole = async (userId, roleId, assignedBy = null, connection = dbPool) => {
   if (!userId || !roleId) return;
-  await dbPool.query(
+  await connection.query(
     "INSERT IGNORE INTO user_roles (user_id, role_id, assigned_by) VALUES (?, ?, ?)",
     [userId, roleId, assignedBy]
   );
 };
 
-const seedRbac = async () => {
-  const adminRoleId = await ensureRole("admin", "Standard admin role");
-  const superRoleId = await ensureRole("super_admin", "Super admin role");
-  const adminAccessId = await ensurePermission("admin.access", "Access to admin endpoints");
-  const superAccessId = await ensurePermission("admin.super", "Super admin access");
-  await ensureRolePermission(adminRoleId, adminAccessId);
-  await ensureRolePermission(superRoleId, adminAccessId);
-  await ensureRolePermission(superRoleId, superAccessId);
+const seedRbac = async (connection = dbPool) => {
+  const adminRoleId = await ensureRole("admin", "Standard admin role", connection);
+  const superRoleId = await ensureRole("super_admin", "Super admin role", connection);
+  const adminAccessId = await ensurePermission("admin.access", "Access to admin endpoints", connection);
+  const superAccessId = await ensurePermission("admin.super", "Super admin access", connection);
+  await ensureRolePermission(adminRoleId, adminAccessId, connection);
+  await ensureRolePermission(superRoleId, adminAccessId, connection);
+  await ensureRolePermission(superRoleId, superAccessId, connection);
 };
 
-const fetchUserRoles = async (userId) => {
-  const [rows] = await dbPool.query(
+const fetchUserRoles = async (userId, connection = dbPool) => {
+  const [rows] = await connection.query(
     `SELECT r.name
      FROM user_roles ur
      JOIN roles r ON r.id = ur.role_id
@@ -376,8 +366,8 @@ const fetchUserRoles = async (userId) => {
   return rows.map((row) => row.name);
 };
 
-const fetchUserPermissions = async (userId) => {
-  const [rows] = await dbPool.query(
+const fetchUserPermissions = async (userId, connection = dbPool) => {
+  const [rows] = await connection.query(
     `SELECT DISTINCT p.name
      FROM user_roles ur
      JOIN role_permissions rp ON rp.role_id = ur.role_id
@@ -388,10 +378,10 @@ const fetchUserPermissions = async (userId) => {
   return rows.map((row) => row.name);
 };
 
-const enrichUser = async (user) => {
+const enrichUser = async (user, connection = dbPool) => {
   if (!user) return null;
-  const roles = await fetchUserRoles(user.id);
-  const permissions = await fetchUserPermissions(user.id);
+  const roles = await fetchUserRoles(user.id, connection);
+  const permissions = await fetchUserPermissions(user.id, connection);
   return {
     ...user,
     roles,
@@ -576,6 +566,17 @@ const fetchUserById = async (userId) => {
   return enrichUser(baseUser);
 };
 
+const isDeviceRevoked = async (userId, deviceId) => {
+  const [rows] = await dbPool.query(
+    "SELECT revoked_at AS revokedAt FROM user_devices WHERE id = ? AND user_id = ? LIMIT 1",
+    [deviceId, userId]
+  );
+  if (!rows.length) {
+    return true;
+  }
+  return Boolean(rows[0].revokedAt);
+};
+
 const authenticateToken = async (req, res, next) => {
   const authHeader = req.headers.authorization || "";
   if (!authHeader.startsWith("Bearer ")) {
@@ -591,6 +592,10 @@ const authenticateToken = async (req, res, next) => {
     if (!userId) {
       return res.status(401).json({ ok: false, message: "Invalid token subject." });
     }
+    const deviceId = parsePositiveInt(payload?.deviceId);
+    if (!deviceId) {
+      return res.status(401).json({ ok: false, message: "Invalid token device." });
+    }
     const user = await fetchUserById(userId);
     if (!user) {
       return res.status(401).json({ ok: false, message: "User not found." });
@@ -598,7 +603,11 @@ const authenticateToken = async (req, res, next) => {
     if (user.isBanned) {
       return res.status(403).json({ ok: false, message: "User is banned." });
     }
-    req.user = user;
+    const revoked = await isDeviceRevoked(userId, deviceId);
+    if (revoked) {
+      return res.status(403).json({ ok: false, message: "Device access revoked." });
+    }
+    req.user = { ...user, deviceId };
     return next();
   } catch (error) {
     return res.status(401).json({ ok: false, message: "Invalid or expired token." });
@@ -619,12 +628,35 @@ const requireSuperAdmin = (req, res, next) => {
   return next();
 };
 
-const setCachedUser = async (user) => {
-  if (!redisClient) {
-    return;
+const waitForSchema = async () => {
+  const requiredTables = [
+    "users",
+    "roles",
+    "permissions",
+    "role_permissions",
+    "user_roles",
+    "user_devices",
+    "refresh_tokens",
+    "auth_secrets"
+  ];
+  const placeholders = requiredTables.map(() => "?").join(", ");
+  const maxAttempts = 12;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const [rows] = await dbPool.query(
+      `SELECT COUNT(*) AS count
+       FROM information_schema.TABLES
+       WHERE TABLE_SCHEMA = ? AND TABLE_NAME IN (${placeholders})`,
+      [dbName, ...requiredTables]
+    );
+    if (Number(rows[0]?.count) === requiredTables.length) {
+      return;
+    }
+    if (attempt === maxAttempts) {
+      throw new Error("Schema not ready for gateway");
+    }
+    logger.warn({ attempt, maxAttempts }, "Schema not ready, retrying");
+    await new Promise((resolve) => setTimeout(resolve, 2000));
   }
-  const cacheKey = `auth:user:${user.email}`;
-  await redisClient.set(cacheKey, JSON.stringify(user), { EX: authCacheTtlSeconds });
 };
 
 const initDatabase = async () => {
@@ -655,18 +687,10 @@ const initDatabase = async () => {
     }
   }
 
+  await waitForSchema();
 };
 
-const initRedis = async () => {
-  const client = createRedisClient({ url: `redis://${redisHost}:${redisPort}` });
-  client.on("error", (err) => {
-    logger.error({ err }, "Redis error");
-  });
-  await client.connect();
-  redisClient = client;
-};
-
-// Registration endpoint backed by MySQL and cached in Redis.
+// Registration endpoint backed by MySQL.
 app.post(
   "/auth/register",
   authLimiter,
@@ -724,14 +748,14 @@ app.post(
           [result.insertId]
         );
         try {
-          await seedRbac();
-          const adminRoleId = await ensureRole("admin", "Standard admin role");
-          const superRoleId = await ensureRole("super_admin", "Super admin role");
+          await seedRbac(connection);
+          const adminRoleId = await ensureRole("admin", "Standard admin role", connection);
+          const superRoleId = await ensureRole("super_admin", "Super admin role", connection);
           if (adminRoleId) {
-            await ensureUserRole(result.insertId, adminRoleId, result.insertId);
+            await ensureUserRole(result.insertId, adminRoleId, result.insertId, connection);
           }
           if (superRoleId) {
-            await ensureUserRole(result.insertId, superRoleId, result.insertId);
+            await ensureUserRole(result.insertId, superRoleId, result.insertId, connection);
           }
         } catch (rbacError) {
           logger.warn({ err: rbacError }, "RBAC assignment skipped");
@@ -746,7 +770,7 @@ app.post(
         points: startingPoints,
         isBanned: false
       };
-      const user = await enrichUser(baseUser);
+      const user = await enrichUser(baseUser, connection);
 
       const deviceInfo = await upsertUserDevice(connection, user.id, req);
       if (deviceInfo.isRevoked) {
@@ -755,7 +779,8 @@ app.post(
         logger.warn({ userId: user.id, deviceId: deviceInfo.deviceId }, "register_blocked_device_revoked");
         return res.status(403).json({ ok: false, message: "Device access revoked." });
       }
-      const token = await signJwt({ sub: String(user.id), email: user.email });
+      const deviceId = Number(deviceInfo.deviceId);
+      const token = await signJwt({ sub: String(user.id), email: user.email, deviceId });
       const refreshToken = await issueRefreshToken(connection, user.id, deviceInfo.deviceId || null);
       await logAudit(connection, {
         actorUserId: user.id,
@@ -773,8 +798,6 @@ app.post(
       });
 
       await connection.commit();
-      await setCachedUser(user);
-
       recordAuthMetric("register", "success");
       logger.info({
         userId: user.id,
@@ -804,7 +827,7 @@ app.post(
   }
 );
 
-// Login endpoint backed by MySQL with Redis caching.
+// Login endpoint backed by MySQL.
 app.post(
   "/auth/login",
   authLimiter,
@@ -865,7 +888,8 @@ app.post(
         logger.warn({ userId: user.id, deviceId: deviceInfo.deviceId }, "login_blocked_device_revoked");
         return res.status(403).json({ ok: false, message: "Device access revoked." });
       }
-      const token = await signJwt({ sub: String(user.id), email: user.email });
+      const deviceId = Number(deviceInfo.deviceId);
+      const token = await signJwt({ sub: String(user.id), email: user.email, deviceId });
       const refreshToken = await issueRefreshToken(connection, user.id, deviceInfo.deviceId || null);
       await logAudit(connection, {
         actorUserId: user.id,
@@ -874,8 +898,6 @@ app.post(
         reason: "auth_login"
       });
       await connection.commit();
-
-      await setCachedUser(user);
 
       recordAuthMetric("login", "success");
       logger.info({
@@ -944,7 +966,13 @@ app.post(
         recordAuthMetric("refresh", "error");
         return res.status(403).json({ ok: false, message: "User is banned." });
       }
-      const token = await signJwt({ sub: String(user.id), email: user.email });
+      const deviceId = parsePositiveInt(rotated.deviceId);
+      if (!deviceId) {
+        await connection.rollback();
+        recordAuthMetric("refresh", "error");
+        return res.status(401).json({ ok: false, message: "Invalid refresh token." });
+      }
+      const token = await signJwt({ sub: String(user.id), email: user.email, deviceId });
       await logAudit(connection, {
         actorUserId: user.id,
         targetUserId: user.id,
@@ -1086,13 +1114,6 @@ const start = async () => {
   } catch (error) {
     logger.warn({ err: error }, "RBAC seed skipped");
   }
-  try {
-    await initRedis();
-  } catch (error) {
-    logger.error({ err: error }, "Redis unavailable, continuing without cache");
-    redisClient = null;
-  }
-
   // Start listening for gateway requests.
   server.listen(port, () => {
     logger.info({ port }, "Gateway listening");

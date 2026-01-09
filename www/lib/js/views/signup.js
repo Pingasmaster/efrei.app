@@ -1,4 +1,4 @@
-export const renderSignup = (root, { api, updateStatus, navigate }) => {
+export const renderSignup = (root, { api, state, updateStatus, navigate }) => {
     root.innerHTML = `
         <div class="signup-container">
             <div class="signup-header">
@@ -76,14 +76,26 @@ export const renderSignup = (root, { api, updateStatus, navigate }) => {
 
         const formData = new FormData(form);
         try {
-            await api.register({
+            const data = await api.register({
                 name: formData.get("name"),
                 email: formData.get("email"),
                 password: formData.get("password")
             });
-            setStatus("Account created. You can now sign in.", "success");
-            if (typeof navigate === "function") {
-                setTimeout(() => navigate("/login"), 800);
+            if (data?.token && typeof state?.setToken === "function") {
+                state.setToken(data.token);
+                if (data?.refreshToken && typeof state?.setRefreshToken === "function") {
+                    state.setRefreshToken(data.refreshToken);
+                }
+                updateStatus?.();
+                setStatus("Account created. Signed in successfully.", "success");
+                if (typeof navigate === "function") {
+                    setTimeout(() => navigate("/"), 600);
+                }
+            } else {
+                setStatus("Account created. You can now sign in.", "success");
+                if (typeof navigate === "function") {
+                    setTimeout(() => navigate("/login"), 800);
+                }
             }
         } catch (error) {
             setStatus(error.message || "Signup failed.", "error");
