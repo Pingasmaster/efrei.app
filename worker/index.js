@@ -113,10 +113,11 @@ const loadJwtSecrets = async () => {
     .filter((row) => !row.expiresAt || new Date(row.expiresAt).getTime() > Date.now())
     .map((row) => row.secret)
     .filter(Boolean);
-  if (hasJwtSecret && !valid.includes(jwtSecret)) {
-    valid.push(jwtSecret);
+  let secrets = valid;
+  if (!secrets.length && hasJwtSecret) {
+    secrets = [jwtSecret];
   }
-  jwtSecretsCache = { secrets: valid, fetchedAt: now };
+  jwtSecretsCache = { secrets, fetchedAt: now };
   return jwtSecretsCache;
 };
 

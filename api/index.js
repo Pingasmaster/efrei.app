@@ -336,6 +336,10 @@ const ErrorResponseSchema = z.object({
 
 const OkResponseSchema = z.object({ ok: z.literal(true) }).openapi("OkResponse");
 const MetricsResponseSchema = z.string().openapi("MetricsResponse");
+const HealthResponseSchema = z.object({
+  status: z.string(),
+  service: z.string()
+}).openapi("HealthResponse");
 const AdminDeviceSchema = z.object({
   id: z.number(),
   fingerprint: z.string(),
@@ -370,6 +374,7 @@ const AdminSessionListSchema = z.object({
 registry.register("ErrorResponse", ErrorResponseSchema);
 registry.register("OkResponse", OkResponseSchema);
 registry.register("MetricsResponse", MetricsResponseSchema);
+registry.register("HealthResponse", HealthResponseSchema);
 registry.register("AdminDevice", AdminDeviceSchema);
 registry.register("AdminDeviceList", AdminDeviceListSchema);
 registry.register("AdminSession", AdminSessionSchema);
@@ -499,7 +504,17 @@ registerRoute({
   summary: "Health check",
   tags: ["System"],
   params: z.object({}),
-  query: z.object({})
+  query: z.object({}),
+  responses: {
+    200: {
+      description: "Health",
+      content: { "application/json": { schema: HealthResponseSchema } }
+    },
+    400: {
+      description: "Bad Request",
+      content: { "application/json": { schema: ErrorResponseSchema } }
+    }
+  }
 });
 app.get("/health", validateRequest(emptyRequestSchema), (req, res) => {
   res.json({ status: "ok", service: "api" });
@@ -518,19 +533,6 @@ registerRoute({
       content: { "text/plain": { schema: MetricsResponseSchema } }
     }
   }
-});
-
-// Placeholder endpoint for future business logic.
-registerRoute({
-  method: "get",
-  path: "/absurde",
-  summary: "Stub endpoint",
-  tags: ["System"],
-  params: z.object({}),
-  query: z.object({})
-});
-app.get("/absurde", validateRequest(emptyRequestSchema), (req, res) => {
-  res.json({ message: "stub", idea: "replace with your business logic" });
 });
 
 // Synchronous REST endpoint that returns the latest odds snapshot.
@@ -903,11 +905,11 @@ const loadJwtSecrets = async () => {
     .map((row) => ({ secret: row.secret, isPrimary: Boolean(row.isPrimary) }));
 
   const primary = valid.find((row) => row.isPrimary) || null;
-  const secrets = valid.map((row) => row.secret);
-  if (jwtSecret && !secrets.includes(jwtSecret)) {
-    secrets.push(jwtSecret);
+  let secrets = valid.map((row) => row.secret);
+  if (!secrets.length && jwtSecret) {
+    secrets = [jwtSecret];
   }
-  jwtSecretsCache = { secrets, primary: primary?.secret || null, fetchedAt: now };
+  jwtSecretsCache = { secrets, primary: primary?.secret || (secrets[0] || null), fetchedAt: now };
   return jwtSecretsCache;
 };
 

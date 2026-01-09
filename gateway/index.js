@@ -475,11 +475,11 @@ const loadJwtSecrets = async () => {
     .map((row) => ({ secret: row.secret, isPrimary: Boolean(row.isPrimary) }));
 
   const primary = valid.find((row) => row.isPrimary) || null;
-  const secrets = valid.map((row) => row.secret);
-  if (jwtSecret && !secrets.includes(jwtSecret)) {
-    secrets.push(jwtSecret);
+  let secrets = valid.map((row) => row.secret);
+  if (!secrets.length && jwtSecret) {
+    secrets = [jwtSecret];
   }
-  jwtSecretsCache = { secrets, primary: primary?.secret || null, fetchedAt: now };
+  jwtSecretsCache = { secrets, primary: primary?.secret || (secrets[0] || null), fetchedAt: now };
   return jwtSecretsCache;
 };
 

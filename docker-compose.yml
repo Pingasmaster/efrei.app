@@ -15,6 +15,7 @@ services:
     build:
       context: .
       dockerfile: frontend/Containerfile
+    restart: unless-stopped
     ports:
       - "${FRONTEND_PORT}:80"
     depends_on:
@@ -30,6 +31,7 @@ services:
     build:
       context: .
       dockerfile: gateway/Containerfile
+    restart: unless-stopped
     environment:
       PORT: "${GATEWAY_PORT}"
       JWT_SECRET: "${JWT_SECRET}"
@@ -68,6 +70,7 @@ services:
     build:
       context: .
       dockerfile: api/Containerfile
+    restart: unless-stopped
     environment:
       PORT: "${API_PORT}"
       JWT_SECRET: "${JWT_SECRET}"
@@ -102,6 +105,7 @@ services:
   mysql:
     image: mysql:9.5.0
     command: ["--log-bin-trust-function-creators=1"]
+    restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD}"
       MYSQL_DATABASE: "${DB_NAME}"
@@ -118,6 +122,7 @@ services:
   # Redis used for caching and pub/sub of odds updates.
   redis:
     image: redis:8.4.0-alpine
+    restart: unless-stopped
     depends_on:
       env-check:
         condition: service_completed_successfully
@@ -129,6 +134,7 @@ services:
     build:
       context: .
       dockerfile: worker/Containerfile
+    restart: unless-stopped
     environment:
       JWT_SECRET: "${JWT_SECRET}"
       JWT_ISSUER: "${JWT_ISSUER}"
@@ -164,6 +170,7 @@ services:
   prometheus:
     image: prom/prometheus:latest
     command: ["/bin/sh", "-c", "TOKEN=\"$${METRICS_BEARER_TOKEN:-$${JWT_SECRET}}\"; printf '%s' \"$${TOKEN}\" > /prometheus/bearer_token && prometheus --config.file=/etc/prometheus/prometheus.yml"]
+    restart: unless-stopped
     environment:
       METRICS_BEARER_TOKEN: "${METRICS_BEARER_TOKEN}"
       JWT_SECRET: "${JWT_SECRET}"
@@ -182,6 +189,7 @@ services:
   alertmanager:
     image: prom/alertmanager:latest
     command: ["--config.file=/etc/alertmanager/alertmanager.yml"]
+    restart: unless-stopped
     volumes:
       - ./deploy/observability/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
     ports:
@@ -192,6 +200,7 @@ services:
   loki:
     image: grafana/loki:latest
     command: ["-config.file=/etc/loki/loki.yml"]
+    restart: unless-stopped
     volumes:
       - ./deploy/observability/loki.yml:/etc/loki/loki.yml:ro
     ports:
@@ -202,6 +211,7 @@ services:
   promtail:
     image: grafana/promtail:latest
     command: ["-config.file=/etc/promtail/promtail.yml"]
+    restart: unless-stopped
     volumes:
       - ./deploy/observability/promtail.yml:/etc/promtail/promtail.yml:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro

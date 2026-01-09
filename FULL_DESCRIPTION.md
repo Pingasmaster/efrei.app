@@ -15,7 +15,7 @@ Ce document décrit l’état actuel de l’application côté **backend / infra
 
 Services principaux (conteneurs Docker) :
 - **env-check** : job one-shot qui valide `.env` (ports, secrets, URLs). Si une valeur requise manque ou est encore en valeur par défaut, le stack ne démarre pas.
-- **frontend** (Nginx) : sert les fichiers statiques (SPA + service worker) depuis `www/`. Aucune logique métier, uniquement du contenu HTTP.
+- **frontend** (Nginx) : sert les fichiers statiques (SPA + service worker) depuis `www/`. En mode Docker, proxy `/auth/*`, `/api/*` et `/ws/*` vers la gateway pour permettre un **same-origin** côté SPA.
 - **gateway** (Express) :
   - Authentification (`/auth/*`) avec JWT + refresh tokens.
   - Détection d’appareils (empreinte) et stockage dans `user_devices`.
@@ -93,7 +93,7 @@ Fichier `.env.example` :
 - **Super admin bootstrap**
   - `ADMIN_BOOTSTRAP_EMAIL` ou `ADMIN_BOOTSTRAP_USER_ID`
 
-**Important :** le gateway et l’API lisent leurs secrets depuis `auth_secrets`. `JWT_SECRET` sert uniquement de secret initial si la table est vide, **mais il doit être défini à une valeur non‑défaut** (les services échouent au démarrage sinon). Les variables DB (`DB_USER`, `DB_PASSWORD`) doivent aussi être définies à des valeurs non‑défaut (validation via `env-check`).
+**Important :** le gateway, l’API et le worker lisent leurs secrets depuis `auth_secrets`. `JWT_SECRET` sert uniquement de secret initial si la table est vide (fallback de bootstrap) et **n’est plus accepté** dès qu’un secret valide existe en base. Il doit rester défini à une valeur non‑défaut (les services échouent au démarrage sinon). Les variables DB (`DB_USER`, `DB_PASSWORD`) doivent aussi être définies à des valeurs non‑défaut (validation via `env-check`).
 
 ---
 
@@ -335,6 +335,7 @@ Endpoint dédié : `GET /admin/logs`
 
 ### GET `/health`
 **But :** Health check du gateway.
+- Retour: `{ status, service }`
 - Restriction: publique
 
 ### GET `/metrics`
@@ -360,6 +361,7 @@ Toutes les routes sensibles exigent:
 
 #### GET `/health`
 **But :** Health check.
+- Retour: `{ status, service }`
 - Restriction: publique
 
 #### GET `/metrics`
@@ -368,10 +370,6 @@ Toutes les routes sensibles exigent:
 
 #### GET `/odds`
 **But :** Dernier snapshot des cotes.
-- Restriction: publique
-
-#### GET `/absurde`
-**But :** Endpoint stub (placeholder).
 - Restriction: publique
 
 #### GET `/openapi.json`
