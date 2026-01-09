@@ -30,6 +30,7 @@ const payoutDeadLetterQueueName = process.env.PAYOUT_DEAD_LETTER_QUEUE || "payou
 const metricsPort = Number(process.env.METRICS_PORT || 9102);
 const logLevel = process.env.LOG_LEVEL || "info";
 const jwtSecret = process.env.JWT_SECRET;
+const metricsBearerToken = process.env.METRICS_BEARER_TOKEN || jwtSecret;
 const jwtIssuer = process.env.JWT_ISSUER || "efrei.app";
 const jwtAudience = process.env.JWT_AUDIENCE || "efrei.app";
 const hasJwtSecret = Boolean(jwtSecret && jwtSecret !== "change-me" && jwtSecret !== "dev-secret");
@@ -149,6 +150,9 @@ const authenticateMetricsRequest = async (req) => {
     return { ok: false, status: 401, message: "Missing bearer token." };
   }
   const token = authHeader.slice("Bearer ".length).trim();
+  if (metricsBearerToken && token === metricsBearerToken) {
+    return { ok: true };
+  }
   const secrets = await getJwtSecrets();
   if (!secrets.length) {
     return { ok: false, status: 503, message: "Metrics auth not configured." };

@@ -21,14 +21,14 @@ Services principaux (conteneurs Docker) :
   - Détection d’appareils (empreinte) et stockage dans `user_devices`.
   - Proxy HTTP `/api/*` et WebSocket `/ws/*` vers l’API métier.
   - RBAC (permissions) pour les contrôles admin/super admin.
-  - Expose `/health` et `/metrics` (Prometheus, **admin uniquement**).
+  - Expose `/health` et `/metrics` (Prometheus, **admin JWT** ou **token metrics**).
   - Émet des logs JSON structurés (Pino).
 - **api** (Express) :
   - Logique métier (offres, paris, transferts de points, admin, audit logs).
   - OpenAPI auto-généré (`/openapi.json`) + Swagger UI (`/docs`).
   - Idempotency keys pour les endpoints sensibles.
   - WebSocket odds `/ws/odds` + endpoint `/odds`.
-  - Expose `/health` et `/metrics` (Prometheus, **admin uniquement**).
+  - Expose `/health` et `/metrics` (Prometheus, **admin JWT** ou **token metrics**).
   - Émet des logs JSON structurés (Pino).
   - Initialise le schéma MySQL (mode dev) via `ensureSchema` avec retries si MySQL n’est pas encore prêt (FK/DB manquants).
 - **mysql** : persistance des utilisateurs, paris, offres, tokens, audit logs, jobs de payout.
@@ -40,10 +40,10 @@ Services principaux (conteneurs Docker) :
   - Consomme la queue `payout_jobs`, applique les payouts et les fees.
   - Retry/backoff avec `PAYOUT_DELAYED_SET` + dead-letter queue `PAYOUT_DEAD_LETTER_QUEUE`.
   - Attend la disponibilité des tables MySQL avant de démarrer les traitements.
-  - Expose `/metrics` sur `METRICS_PORT` (Prometheus, **admin uniquement**) + logs JSON.
+  - Expose `/metrics` sur `METRICS_PORT` (Prometheus, **admin JWT** ou **token metrics**) + logs JSON.
 
 Observability (inclus dans `docker-compose.yml`) :
-- **prometheus** : scrape `/metrics` (gateway/api/worker) **avec token admin**, stocke les séries temporelles, alimente les alertes.
+- **prometheus** : scrape `/metrics` (gateway/api/worker) **avec token metrics** (par défaut `METRICS_BEARER_TOKEN` ou `JWT_SECRET`), stocke les séries temporelles, alimente les alertes.
 - **alertmanager** : reçoit et distribue les alertes Prometheus (config simple par défaut).
 - **loki** : stockage des logs structurés.
 - **promtail** : collecte les logs Docker et les pousse vers Loki.
@@ -88,6 +88,7 @@ Fichier `.env.example` :
   - `REFRESH_TOKEN_DAYS`
 - **Observability**
   - `LOG_LEVEL` (Pino)
+  - `METRICS_BEARER_TOKEN` (token partagé pour Prometheus; défaut = `JWT_SECRET`)
   - `METRICS_PORT` (worker)
 - **Super admin bootstrap**
   - `ADMIN_BOOTSTRAP_EMAIL` ou `ADMIN_BOOTSTRAP_USER_ID`
@@ -338,7 +339,7 @@ Endpoint dédié : `GET /admin/logs`
 
 ### GET `/metrics`
 **But :** Expose les métriques Prometheus du gateway.
-- Restriction: **admin uniquement** (`Authorization: Bearer <token>`)
+- Restriction: **admin JWT** ou **token metrics** (`Authorization: Bearer <JWT>` ou `Authorization: Bearer <METRICS_BEARER_TOKEN>`)
 
 ### Proxy
 - `/api/*` -> API métier
@@ -363,7 +364,7 @@ Toutes les routes sensibles exigent:
 
 #### GET `/metrics`
 **But :** Expose les métriques Prometheus de l’API.
-- Restriction: **admin uniquement** (`Authorization: Bearer <token>`)
+- Restriction: **admin JWT** ou **token metrics** (`Authorization: Bearer <JWT>` ou `Authorization: Bearer <METRICS_BEARER_TOKEN>`)
 
 #### GET `/odds`
 **But :** Dernier snapshot des cotes.
@@ -739,9 +740,9 @@ Toutes les routes sensibles exigent:
 - **Logs structurés** JSON (Pino) dans `gateway`, `api`, `odds-worker`.
 - **Trace ID** : le gateway génère un `X-Request-Id` et le propage à l’API.
 - **Metrics Prometheus** :
-  - Gateway : `/metrics` (port `GATEWAY_PORT`) **admin uniquement**
-  - API : `/metrics` (port `API_PORT`) **admin uniquement**
-  - Worker : `/metrics` (port `METRICS_PORT`) **admin uniquement**
+  - Gateway : `/metrics` (port `GATEWAY_PORT`) **admin JWT** ou **token metrics**
+  - API : `/metrics` (port `API_PORT`) **admin JWT** ou **token metrics**
+  - Worker : `/metrics` (port `METRICS_PORT`) **admin JWT** ou **token metrics**
 - **Stack intégrée** (définie dans `docker-compose.yml`) :
   - Prometheus (scrape + rules), Alertmanager (alert routing)
   - Loki (stockage logs), Promtail (collecte logs Docker)

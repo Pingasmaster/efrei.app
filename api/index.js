@@ -20,6 +20,7 @@ extendZodWithOpenApi(z);
 const app = express();
 const port = process.env.PORT || 4000;
 const jwtSecret = process.env.JWT_SECRET;
+const metricsBearerToken = process.env.METRICS_BEARER_TOKEN || jwtSecret;
 const logLevel = process.env.LOG_LEVEL || "info";
 const trustProxy = process.env.TRUST_PROXY || "loopback, linklocal, uniquelocal";
 const jwtIssuer = process.env.JWT_ISSUER || "efrei.app";
@@ -1270,6 +1271,18 @@ const getUserFromRequest = async (req) => {
   return user;
 };
 
+const isMetricsBearerAuth = (req) => {
+  if (!metricsBearerToken) {
+    return false;
+  }
+  const authHeader = req.headers.authorization || "";
+  if (!authHeader.startsWith("Bearer ")) {
+    return false;
+  }
+  const token = authHeader.slice("Bearer ".length).trim();
+  return Boolean(token && token === metricsBearerToken);
+};
+
 const authenticate = async (req, res, next) => {
   try {
     const user = await getUserFromRequest(req);
@@ -1284,6 +1297,20 @@ const authenticate = async (req, res, next) => {
   } catch (error) {
     return res.status(401).json({ ok: false, message: "Invalid or expired token." });
   }
+};
+
+const authenticateMetrics = async (req, res, next) => {
+  if (isMetricsBearerAuth(req)) {
+    req.user = {
+      id: null,
+      permissions: ["admin.access", "admin.super"],
+      isAdmin: true,
+      isSuperAdmin: true,
+      isBanned: false
+    };
+    return next();
+  }
+  return authenticate(req, res, next);
 };
 
 const optionalAuthenticate = async (req, res, next) => {
@@ -1312,7 +1339,7 @@ const requirePermission = (permission) => (req, res, next) => {
 const requireAdmin = requirePermission("admin.access");
 const requireSuperAdmin = requirePermission("admin.super");
 
-app.get("/metrics", authenticate, requireAdmin, async (req, res) => {
+app.get("/metrics", authenticateMetrics, requireAdmin, async (req, res) => {
   res.setHeader("Content-Type", metricsRegistry.contentType);
   res.send(await metricsRegistry.metrics());
 });

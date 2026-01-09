@@ -8,15 +8,18 @@ rule_files:
 scrape_configs:
   - job_name: "gateway"
     metrics_path: /metrics
+    bearer_token_file: /prometheus/bearer_token
     static_configs:
       - targets: ["gateway:3000"]
 
   - job_name: "api"
     metrics_path: /metrics
+    bearer_token_file: /prometheus/bearer_token
     static_configs:
       - targets: ["api:4000"]
 
   - job_name: "worker"
     metrics_path: /metrics
+    bearer_token_file: /prometheus/bearer_token
     static_configs:
       - targets: ["odds-worker:9102"]

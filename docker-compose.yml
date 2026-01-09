@@ -35,6 +35,7 @@ services:
       JWT_SECRET: "${JWT_SECRET}"
       JWT_ISSUER: "${JWT_ISSUER}"
       JWT_AUDIENCE: "${JWT_AUDIENCE}"
+      METRICS_BEARER_TOKEN: "${METRICS_BEARER_TOKEN}"
       BUSINESS_API_URL: "${BUSINESS_API_URL}"
       LOG_LEVEL: "${LOG_LEVEL}"
       CORS_ORIGINS: "${CORS_ORIGINS}"
@@ -72,6 +73,7 @@ services:
       JWT_SECRET: "${JWT_SECRET}"
       JWT_ISSUER: "${JWT_ISSUER}"
       JWT_AUDIENCE: "${JWT_AUDIENCE}"
+      METRICS_BEARER_TOKEN: "${METRICS_BEARER_TOKEN}"
       LOG_LEVEL: "${LOG_LEVEL}"
       CORS_ORIGINS: "${CORS_ORIGINS}"
       ADMIN_BOOTSTRAP_EMAIL: "${ADMIN_BOOTSTRAP_EMAIL}"
@@ -131,6 +133,7 @@ services:
       JWT_SECRET: "${JWT_SECRET}"
       JWT_ISSUER: "${JWT_ISSUER}"
       JWT_AUDIENCE: "${JWT_AUDIENCE}"
+      METRICS_BEARER_TOKEN: "${METRICS_BEARER_TOKEN}"
       DB_HOST: "${DB_HOST}"
       DB_PORT: "${DB_PORT}"
       DB_NAME: "${DB_NAME}"
@@ -160,7 +163,10 @@ services:
   # Observability stack (metrics, alerts, logs).
   prometheus:
     image: prom/prometheus:latest
-    command: ["--config.file=/etc/prometheus/prometheus.yml"]
+    command: ["/bin/sh", "-c", "TOKEN=\"$${METRICS_BEARER_TOKEN:-$${JWT_SECRET}}\"; printf '%s' \"$${TOKEN}\" > /prometheus/bearer_token && prometheus --config.file=/etc/prometheus/prometheus.yml"]
+    environment:
+      METRICS_BEARER_TOKEN: "${METRICS_BEARER_TOKEN}"
+      JWT_SECRET: "${JWT_SECRET}"
     volumes:
       - ./deploy/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./deploy/observability/alert.rules.yml:/etc/prometheus/alert.rules.yml:ro

@@ -16,6 +16,7 @@ const app = express();
 // Runtime configuration (defaults match docker-compose service names/ports).
 const port = process.env.PORT || 3000;
 const jwtSecret = process.env.JWT_SECRET;
+const metricsBearerToken = process.env.METRICS_BEARER_TOKEN || jwtSecret;
 const businessApiUrl = process.env.BUSINESS_API_URL || "http://api:4000";
 const logLevel = process.env.LOG_LEVEL || "info";
 const trustProxy = process.env.TRUST_PROXY || "loopback, linklocal, uniquelocal";
@@ -608,6 +609,32 @@ const isDeviceRevoked = async (userId, deviceId) => {
   return Boolean(rows[0].revokedAt);
 };
 
+const isMetricsBearerAuth = (req) => {
+  if (!metricsBearerToken) {
+    return false;
+  }
+  const authHeader = req.headers.authorization || "";
+  if (!authHeader.startsWith("Bearer ")) {
+    return false;
+  }
+  const token = authHeader.slice("Bearer ".length).trim();
+  return Boolean(token && token === metricsBearerToken);
+};
+
+const authenticateMetrics = async (req, res, next) => {
+  if (isMetricsBearerAuth(req)) {
+    req.user = {
+      id: null,
+      permissions: ["admin.access", "admin.super"],
+      isAdmin: true,
+      isSuperAdmin: true,
+      isBanned: false
+    };
+    return next();
+  }
+  return authenticateToken(req, res, next);
+};
+
 const authenticateToken = async (req, res, next) => {
   const authHeader = req.headers.authorization || "";
   if (!authHeader.startsWith("Bearer ")) {
@@ -659,7 +686,7 @@ const requireSuperAdmin = (req, res, next) => {
   return next();
 };
 
-app.get("/metrics", authenticateToken, requireAdmin, async (req, res) => {
+app.get("/metrics", authenticateMetrics, requireAdmin, async (req, res) => {
   res.setHeader("Content-Type", metricsRegistry.contentType);
   res.send(await metricsRegistry.metrics());
 });
