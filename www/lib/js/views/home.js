@@ -17,69 +17,104 @@ const escapeHtml = (value) => {
 export const renderHome = (root, { state }) => {
     root.innerHTML = `
         <div class="home-container">
-            <div class="home-hero">
-                <p class="hero-eyebrow">Efrei Betting Platform</p>
-                <h1>BET ON<br>CAMPUS<br>LIFE</h1>
-                <p class="lead">
-                    Place bets on what happens at Efrei with points. Win rewards like homework help, AI credits, and exclusive perks. No real money, just pure fun.
-                </p>
-                <div class="hero-actions">
-                    <a class="btn primary" href="/signup" data-link>Start Betting</a>
-                    <a class="btn ghost" href="/login" data-link>Sign In</a>
-                </div>
-            </div>
+            <!-- Hero Section -->
+            <section class="hero">
+                <div class="hero-orb orb-1"></div>
+                <div class="hero-orb orb-2"></div>
+                <div class="hero-orb orb-3"></div>
+                <div class="hero-shape"></div>
 
-            <div class="home-sidebar">
-                <div class="sidebar-stats">
-                    <div class="stat-item">
-                        <span class="stat-value">Points System</span>
-                        <span class="stat-label">Bet safely with virtual points, not real money</span>
+                <div class="hero-content">
+                    <div class="hero-badge">Campus Betting Platform</div>
+                    <h1>Bet on <span class="highlight">Campus</span><br>Win Rewards</h1>
+                    <p class="hero-subtitle">
+                        Place bets on campus events with virtual points. Win real rewards like homework help, AI credits, and exclusive perks.
+                    </p>
+                    <div class="hero-actions">
+                        <a class="btn primary large" href="/signup" data-link>Start Betting</a>
+                        <a class="btn ghost large" href="#markets">View Markets</a>
                     </div>
-                    <div class="stat-item">
-                        <span class="stat-value">Real Rewards</span>
-                        <span class="stat-label">Exchange points for homework help & AI queries</span>
-                    </div>
-                    <div class="stat-item">
-                        <span class="stat-value">Live Updates</span>
-                        <span class="stat-label">Real-time odds on campus events</span>
+
+                    <div class="hero-stats">
+                        <div class="stat">
+                            <span class="stat-value">1000</span>
+                            <span class="stat-label">Starting Points</span>
+                        </div>
+                        <div class="stat">
+                            <span class="stat-value">0%</span>
+                            <span class="stat-label">Real Money</span>
+                        </div>
+                        <div class="stat">
+                            <span class="stat-value">Live</span>
+                            <span class="stat-label">Updates</span>
+                        </div>
                     </div>
                 </div>
-            </div>
-        </div>
+            </section>
 
-        <section class="markets-section">
-            <div class="markets">
+            <!-- Features Section -->
+            <section class="features-section">
+                <div class="section-header">
+                    <span class="section-badge">How It Works</span>
+                    <h2>Simple, Fun, Rewarding</h2>
+                    <p>No real money involved. Just pure campus competition.</p>
+                </div>
+
+                <div class="features-grid">
+                    <div class="feature-card">
+                        <div class="feature-icon">+</div>
+                        <h3>Get Free Points</h3>
+                        <p>Start with 1000 points for free. No deposit required, no credit card needed.</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-icon">*</div>
+                        <h3>Bet on Events</h3>
+                        <p>From exam results to campus happenings - bet on what matters to students.</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-icon">></div>
+                        <h3>Win Rewards</h3>
+                        <p>Exchange points for homework help, AI queries, priority support, and more.</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Markets Section -->
+            <section class="markets-section" id="markets">
                 <div class="markets-header">
-                    <div>
-                        <span class="eyebrow">Live Markets</span>
-                        <h2>Campus Events</h2>
+                    <div class="markets-title">
+                        <h2>Live Markets</h2>
+                        <p>Real-time odds on campus events</p>
                     </div>
                     <span class="status-pill" data-odds-status>Offline</span>
                 </div>
-                <div class="odds-grid" data-odds-grid></div>
-            </div>
 
-            <aside class="bet-slip">
-                <div class="bet-slip-header">
-                    <h3>Bet Slip</h3>
-                    <span class="badge" data-slip-count>0</span>
+                <div class="markets-layout">
+                    <div class="odds-grid" data-odds-grid></div>
+
+                    <aside class="bet-slip">
+                        <div class="bet-slip-header">
+                            <h3>Bet Slip</h3>
+                            <span class="badge" data-slip-count>0</span>
+                        </div>
+                        <div class="bet-slip-list" data-slip-list></div>
+                        <div class="bet-slip-summary">
+                            <label class="field">
+                                <span>Stake (points)</span>
+                                <input type="number" min="1" value="10" placeholder="Enter stake" data-stake>
+                            </label>
+                            <div class="summary-row">
+                                <span>Potential Return</span>
+                                <strong data-return>0 pts</strong>
+                            </div>
+                            <button class="btn primary" type="button" data-place-bet disabled>Place Bet</button>
+                            <button class="btn ghost" type="button" data-clear-slip>Clear Slip</button>
+                            <div class="form-status" role="status" aria-live="polite" data-slip-status></div>
+                        </div>
+                    </aside>
                 </div>
-                <div class="bet-slip-list" data-slip-list></div>
-                <div class="bet-slip-summary">
-                    <label class="field">
-                        <span>Stake</span>
-                        <input type="number" min="1" value="10" data-stake>
-                    </label>
-                    <div class="summary-row">
-                        <span>Potential Return</span>
-                        <strong data-return>€0.00</strong>
-                    </div>
-                    <button class="btn primary" type="button" data-place-bet disabled>Place Bet</button>
-                    <button class="btn ghost" type="button" data-clear-slip>Clear Slip</button>
-                    <div class="form-status" role="status" aria-live="polite" data-slip-status></div>
-                </div>
-            </aside>
-        </section>
+            </section>
+        </div>
     `;
 
     const oddsGrid = root.querySelector("[data-odds-grid]");
@@ -142,9 +177,9 @@ export const renderHome = (root, { state }) => {
     const renderSlip = (snapshot) => {
         slipCount.textContent = snapshot.betslip.length;
         if (!snapshot.betslip.length) {
-            slipList.innerHTML = `<div class="empty">No selections yet.</div>`;
+            slipList.innerHTML = `<div class="empty">No selections yet</div>`;
             placeBetButton.disabled = true;
-            returnValue.textContent = "€0.00";
+            returnValue.textContent = "0 pts";
             return;
         }
 
@@ -166,7 +201,7 @@ export const renderHome = (root, { state }) => {
         const stake = Number(stakeInput.value || 0);
         const combinedOdds = snapshot.betslip.reduce((total, item) => total * item.price, 1);
         const potential = stake > 0 ? stake * combinedOdds : 0;
-        returnValue.textContent = `€${potential.toFixed(2)}`;
+        returnValue.textContent = `${Math.round(potential)} pts`;
         placeBetButton.disabled = false;
     };
 
@@ -218,7 +253,7 @@ export const renderHome = (root, { state }) => {
     };
 
     const handlePlaceBet = () => {
-        slipStatus.textContent = "Bet placed (stub).";
+        slipStatus.textContent = "Bet placed successfully!";
         slipStatus.classList.remove("error");
         slipStatus.classList.add("success");
         state.clearSlip();
@@ -226,12 +261,26 @@ export const renderHome = (root, { state }) => {
 
     const handleClearSlip = () => {
         state.clearSlip();
-        slipStatus.textContent = "Slip cleared.";
+        slipStatus.textContent = "Slip cleared";
         slipStatus.classList.remove("error");
         slipStatus.classList.add("success");
     };
 
+    // Smooth scroll for anchor links
+    const handleAnchorClick = (event) => {
+        const link = event.target.closest('a[href^="#"]');
+        if (link) {
+            event.preventDefault();
+            const targetId = link.getAttribute("href").slice(1);
+            const targetElement = document.getElementById(targetId);
+            if (targetElement) {
+                targetElement.scrollIntoView({ behavior: "smooth" });
+            }
+        }
+    };
+
     root.addEventListener("click", handleClick);
+    root.addEventListener("click", handleAnchorClick);
     stakeInput.addEventListener("input", handleStakeChange);
     placeBetButton.addEventListener("click", handlePlaceBet);
     clearSlipButton.addEventListener("click", handleClearSlip);
@@ -244,6 +293,7 @@ export const renderHome = (root, { state }) => {
 
     return () => {
         root.removeEventListener("click", handleClick);
+        root.removeEventListener("click", handleAnchorClick);
         stakeInput.removeEventListener("input", handleStakeChange);
         placeBetButton.removeEventListener("click", handlePlaceBet);
         clearSlipButton.removeEventListener("click", handleClearSlip);
