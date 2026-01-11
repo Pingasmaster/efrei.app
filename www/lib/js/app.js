@@ -53,7 +53,7 @@ createRouter({
         if (typeof view === "function") {
             cleanupView = view(viewRoot, { api, state, updateStatus, path, navigate }) || null;
         }
-        document.title = path === "/" ? "Efrei.app" : `Efrei.app · ${path.replace("/", "")}`;
+        document.title = path === "/" ? "Central E" : `Central E · ${path.replace("/", "")}`;
         updateStatus();
         updateActiveLinks(path);
     }

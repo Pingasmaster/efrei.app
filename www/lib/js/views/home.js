@@ -25,7 +25,7 @@ export const renderHome = (root, { state }) => {
                 <div class="hero-shape"></div>
 
                 <div class="hero-content">
-                    <div class="hero-badge">Campus Betting Platform</div>
+                    <div class="hero-brand">Central E</div>
                     <h1>Bet on <span class="highlight">Campus</span><br>Win Rewards</h1>
                     <p class="hero-subtitle">
                         Place bets on campus events with virtual points. Win real rewards like homework help, AI credits, and exclusive perks.
