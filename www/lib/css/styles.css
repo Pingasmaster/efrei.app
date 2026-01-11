@@ -20,7 +20,29 @@
     line-height: 1.6;
 }
 
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Rubik+80s+Fade&family=Space+Grotesk:wght@400;500;600;700&display=swap');
+@font-face {
+    font-family: "Inter";
+    src: url("/lib/fonts/Inter-Variable.ttf") format("truetype");
+    font-weight: 100 900;
+    font-style: normal;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "Space Grotesk";
+    src: url("/lib/fonts/SpaceGrotesk-Variable.ttf") format("truetype");
+    font-weight: 300 700;
+    font-style: normal;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "Rubik 80s Fade";
+    src: url("/lib/fonts/Rubik80sFade-Regular.ttf") format("truetype");
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+}
 
 * {
     box-sizing: border-box;
