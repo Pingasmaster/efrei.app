@@ -266,6 +266,7 @@ Append-only (aucun endpoint de suppression).
 
 ### Destination des frais
 - **Tous les frais** vont au **super admin**, et sont loggés (audit `fee_*`).
+  - Si aucun super admin n’est configuré, les frais ne sont pas crédités (l’action reste validée).
 
 ---
 
@@ -321,6 +322,7 @@ Endpoint dédié : `GET /admin/logs`
 - Header: `Authorization: Bearer <token>`
 - Body optionnel: `{ refreshToken }` (révoqué si présent)
 - Effets:
+  - Le refresh token est révoqué **uniquement** s’il appartient à l’utilisateur authentifié
   - Log audit `auth_logout`
 - Restriction: authentifié
 
@@ -568,7 +570,7 @@ Toutes les routes sensibles exigent:
 - Effets:
   - Débit acheteur (points + fee)
   - Crédit créateur (points_cost)
-  - Fee au super admin
+  - Fee au super admin (ignorée si aucun super admin n’est configuré)
   - Log audit + points
  - Idempotency-Key supporté
 
@@ -622,6 +624,7 @@ Toutes les routes sensibles exigent:
 - Query: `active`, `limit`, `offset`, `sort`, `order`, `search`
 - Restriction: publique
 - Note: ne retourne que les paris publics si non authentifié
+  - Si `active=true`, renvoie uniquement les paris `open` dont `closes_at` est dans le futur
 
 #### GET `/bets/:id`
 **But :** Détail pari.
@@ -639,8 +642,9 @@ Toutes les routes sensibles exigent:
 - Body: `{ positionId }`
 - Restriction: authentifié
 - Effets:
+  - Refusé si le bet est **fermé** (status != `open`) ou si `closes_at` est passé
   - Crédit net (fee déduite)
-  - Fee vers super admin
+  - Fee vers super admin (ignorée si aucun super admin n’est configuré)
   - Log `bet_sell`
  - Idempotency-Key supporté
 

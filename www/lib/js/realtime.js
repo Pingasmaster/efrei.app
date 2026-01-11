@@ -2,6 +2,7 @@ export const createOddsStream = ({ url, onMessage, onStatus }) => {
     let socket = null;
     let retryTimer = null;
     let attempts = 0;
+    let shouldReconnect = true;
 
     const updateStatus = (status) => {
         if (typeof onStatus === "function") {
@@ -11,6 +12,7 @@ export const createOddsStream = ({ url, onMessage, onStatus }) => {
 
     const connect = () => {
         if (!url) return;
+        shouldReconnect = true;
         updateStatus("connecting");
         socket = new WebSocket(url);
 
@@ -41,6 +43,7 @@ export const createOddsStream = ({ url, onMessage, onStatus }) => {
     };
 
     const scheduleReconnect = () => {
+        if (!shouldReconnect) return;
         attempts += 1;
         const delay = Math.min(1000 * 2 ** attempts, 15000);
         clearTimeout(retryTimer);
@@ -48,6 +51,7 @@ export const createOddsStream = ({ url, onMessage, onStatus }) => {
     };
 
     const disconnect = () => {
+        shouldReconnect = false;
         clearTimeout(retryTimer);
         retryTimer = null;
         socket?.close();

@@ -1072,7 +1072,10 @@ app.post(
       const { refreshToken } = req.body || {};
       if (refreshToken) {
         const tokenHash = hashToken(refreshToken);
-        await dbPool.query("UPDATE refresh_tokens SET revoked_at = NOW() WHERE token_hash = ?", [tokenHash]);
+        await dbPool.query(
+          "UPDATE refresh_tokens SET revoked_at = NOW() WHERE token_hash = ? AND user_id = ?",
+          [tokenHash, req.user.id]
+        );
       }
       await logAudit(dbPool, {
         actorUserId: req.user.id,

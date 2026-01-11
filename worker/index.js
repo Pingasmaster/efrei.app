@@ -145,6 +145,17 @@ const fetchUserPermissions = async (userId, connection = dbPool) => {
   return rows.map((row) => row.name);
 };
 
+const fetchUserStatus = async (userId, connection = dbPool) => {
+  const [rows] = await connection.query(
+    "SELECT is_banned AS isBanned FROM users WHERE id = ?",
+    [userId]
+  );
+  if (!rows.length) {
+    return null;
+  }
+  return { isBanned: Boolean(rows[0].isBanned) };
+};
+
 const authenticateMetricsRequest = async (req) => {
   const authHeader = req.headers.authorization || "";
   if (!authHeader.startsWith("Bearer ")) {
@@ -177,6 +188,13 @@ const authenticateMetricsRequest = async (req) => {
   const userId = parsePositiveInt(payload?.sub);
   if (!userId) {
     return { ok: false, status: 401, message: "Invalid token subject." };
+  }
+  const status = await fetchUserStatus(userId);
+  if (!status) {
+    return { ok: false, status: 401, message: "User not found." };
+  }
+  if (status.isBanned) {
+    return { ok: false, status: 403, message: "User is banned." };
   }
   const permissions = await fetchUserPermissions(userId);
   if (!permissions.includes("admin.access")) {
@@ -215,17 +233,48 @@ const moveDueDelayedJobs = async () => {
   if (!ids.length) {
     return;
   }
+  const [rows] = await dbPool.query(
+    `SELECT id, status, next_attempt_at AS nextAttemptAt
+     FROM payout_jobs
+     WHERE id IN (${ids.map(() => "?").join(",")})`,
+    ids
+  );
+  const statusById = new Map(rows.map((row) => [Number(row.id), row]));
+  const toQueue = [];
+  for (const value of due) {
+    const id = Number(value);
+    const record = statusById.get(id);
+    if (!record) {
+      continue;
+    }
+    const isRetryWait = record.status === "retry_wait";
+    const nextAttemptAt = record.nextAttemptAt ? new Date(record.nextAttemptAt).getTime() : null;
+    const isDue = !nextAttemptAt || nextAttemptAt <= now;
+    if (isRetryWait && isDue) {
+      toQueue.push(String(value));
+    }
+  }
   const batch = redisQueueClient.multi();
   due.forEach((value) => {
     batch.zRem(payoutDelayedSetName, value);
+  });
+  toQueue.forEach((value) => {
     batch.lPush(payoutQueueName, value);
   });
   await batch.exec();
+  if (!toQueue.length) {
+    return;
+  }
+  const queueIds = toQueue
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value) && value > 0);
   await dbPool.query(
     `UPDATE payout_jobs
      SET status = 'queued', next_attempt_at = NULL, updated_at = NOW()
-     WHERE id IN (${ids.map(() => "?").join(",")})`,
-    ids
+     WHERE status = 'retry_wait'
+       AND (next_attempt_at IS NULL OR next_attempt_at <= NOW())
+       AND id IN (${queueIds.map(() => "?").join(",")})`,
+    queueIds
   );
 };
 

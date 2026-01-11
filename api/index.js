@@ -1162,7 +1162,11 @@ const creditFeeToSuperAdmin = async (connection, feePoints, context = {}) => {
   if (!feePoints) {
     return;
   }
-  const superAdminId = await requireSuperAdminId(connection);
+  const superAdminId = await getSuperAdminId(connection);
+  if (!superAdminId) {
+    logger.warn({ feePoints }, "Skipping fee credit: super admin not configured");
+    return;
+  }
   await applyPointsDelta(connection, {
     userId: superAdminId,
     delta: Number(feePoints),
@@ -1730,6 +1734,9 @@ app.post(
     } catch (error) {
       await connection.rollback();
       console.error("Credit points error", error);
+      if (error?.message === "User not found") {
+        return res.status(404).json({ ok: false, message: "User not found." });
+      }
       return res.status(500).json({ ok: false, message: "Failed to credit points." });
     } finally {
       connection.release();
@@ -1783,6 +1790,9 @@ app.post(
     } catch (error) {
       await connection.rollback();
       console.error("Debit points error", error);
+      if (error?.message === "User not found") {
+        return res.status(404).json({ ok: false, message: "User not found." });
+      }
       if (error.message === "Insufficient points") {
         return res.status(400).json({ ok: false, message: "Insufficient points." });
       }
@@ -1811,6 +1821,10 @@ app.post(
       return res.status(400).json({ ok: false, message: "Invalid user id." });
     }
     try {
+      const [userRows] = await dbPool.query("SELECT id FROM users WHERE id = ?", [userId]);
+      if (!userRows.length) {
+        return res.status(404).json({ ok: false, message: "User not found." });
+      }
       const isTargetSuper = await isSuperAdminUserId(userId);
       if (isTargetSuper) {
         return res.status(400).json({ ok: false, message: "User is already super admin." });
@@ -1854,6 +1868,10 @@ app.post(
       return res.status(400).json({ ok: false, message: "Invalid user id." });
     }
     try {
+      const [userRows] = await dbPool.query("SELECT id FROM users WHERE id = ?", [userId]);
+      if (!userRows.length) {
+        return res.status(404).json({ ok: false, message: "User not found." });
+      }
       const isTargetSuper = await isSuperAdminUserId(userId);
       if (isTargetSuper) {
         return res.status(403).json({ ok: false, message: "Cannot demote super admin." });
@@ -4298,7 +4316,7 @@ app.get(
       const clauses = [];
       const params = [];
       if (onlyActive) {
-        clauses.push("status = 'open'");
+        clauses.push("status = 'open' AND closes_at > NOW()");
       }
       if (search) {
         clauses.push("(title LIKE ? OR description LIKE ? OR details LIKE ?)");
@@ -4539,9 +4557,10 @@ app.post(
         await connection.rollback();
         return res.status(403).json({ ok: false, message: "Access denied." });
       }
-      if (bet.status === "resolved" || bet.status === "cancelled" || bet.status === "resolving") {
+      const closesAt = new Date(bet.closes_at);
+      if (bet.status !== "open" || !Number.isFinite(closesAt.getTime()) || closesAt.getTime() <= Date.now()) {
         await connection.rollback();
-        return res.status(400).json({ ok: false, message: "Bet is not open for sell." });
+        return res.status(400).json({ ok: false, message: "Bet is closed for selling." });
       }
 
       const [positionRows] = await connection.query(
