@@ -1,11 +1,11 @@
-const CACHE_NAME = "efrei-app-static-v6";
+const CACHE_NAME = "efrei-app-static-v8";
 const ASSETS = [
   "/",
   "/index.html",
   "/lib/css/styles.css",
-  "/lib/fonts/Inter-Variable.ttf",
-  "/lib/fonts/SpaceGrotesk-Variable.ttf",
-  "/lib/fonts/Rubik80sFade-Regular.ttf",
+  "/lib/fonts/Inter-Variable.woff2",
+  "/lib/fonts/SpaceGrotesk-Variable.woff2",
+  "/lib/fonts/Rubik80sFade-Regular.woff2",
   "/lib/js/app.js",
   "/lib/js/router.js",
   "/lib/js/state.js",
