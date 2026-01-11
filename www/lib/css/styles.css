@@ -526,7 +526,7 @@ body::after {
 .hero-content {
     position: relative;
     z-index: 1;
-    max-width: 900px;
+    max-width: 1200px;
     animation: scale-in 0.8s ease-out;
 }
 
@@ -545,6 +545,7 @@ body::after {
     letter-spacing: 0.02em;
     position: relative;
     display: inline-block;
+    white-space: nowrap;
 }
 
 .hero-brand::before {
