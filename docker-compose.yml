@@ -169,7 +169,8 @@ services:
   # Observability stack (metrics, alerts, logs).
   prometheus:
     image: prom/prometheus:latest
-    command: ["/bin/sh", "-c", "TOKEN=\"$${METRICS_BEARER_TOKEN:-$${JWT_SECRET}}\"; printf '%s' \"$${TOKEN}\" > /prometheus/bearer_token && prometheus --config.file=/etc/prometheus/prometheus.yml"]
+    entrypoint: ["/bin/sh", "-c"]
+    command: "TOKEN=\"$${METRICS_BEARER_TOKEN:-$${JWT_SECRET}}\"; printf '%s' \"$${TOKEN}\" > /prometheus/bearer_token; exec /bin/prometheus --config.file=/etc/prometheus/prometheus.yml"
     restart: unless-stopped
     environment:
       METRICS_BEARER_TOKEN: "${METRICS_BEARER_TOKEN}"
