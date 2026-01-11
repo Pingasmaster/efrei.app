@@ -203,6 +203,63 @@ body::after {
     50% { border-radius: 30% 60% 70% 40% / 50% 60% 30% 60%; }
 }
 
+@keyframes glitch {
+    0%, 100% {
+        transform: translate(0, 0) skew(0deg);
+        text-shadow:
+            0 0 40px var(--cyan-glow),
+            0 0 80px rgba(0, 212, 255, 0.3);
+    }
+    20% {
+        transform: translate(-2px, 2px) skew(-0.5deg);
+        text-shadow:
+            -3px 0 0 rgba(255, 0, 255, 0.7),
+            3px 0 0 rgba(0, 255, 255, 0.7),
+            0 0 40px var(--cyan-glow);
+    }
+    40% {
+        transform: translate(2px, -1px) skew(0.5deg);
+        text-shadow:
+            2px 0 0 rgba(255, 0, 255, 0.7),
+            -2px 0 0 rgba(0, 255, 255, 0.7),
+            0 0 40px var(--cyan-glow);
+    }
+    60% {
+        transform: translate(-1px, -2px) skew(-0.3deg);
+        text-shadow:
+            0 0 40px var(--cyan-glow),
+            0 0 80px rgba(0, 212, 255, 0.3);
+    }
+    80% {
+        transform: translate(1px, 1px) skew(0.3deg);
+        text-shadow:
+            -2px 0 0 rgba(255, 0, 255, 0.7),
+            2px 0 0 rgba(0, 255, 255, 0.7),
+            0 0 40px var(--cyan-glow);
+    }
+}
+
+@keyframes glitch-clip {
+    0%, 100% {
+        clip-path: inset(0 0 0 0);
+    }
+    10% {
+        clip-path: inset(20% 0 60% 0);
+    }
+    15% {
+        clip-path: inset(40% 0 20% 0);
+    }
+    20% {
+        clip-path: inset(0 0 0 0);
+    }
+    30% {
+        clip-path: inset(70% 0 10% 0);
+    }
+    35% {
+        clip-path: inset(0 0 0 0);
+    }
+}
+
 /* Layout */
 .app-shell {
     min-height: 100vh;
@@ -475,13 +532,53 @@ body::after {
 
 .hero-brand {
     font-family: "Rubik 80s Fade", sans-serif;
-    font-size: clamp(4rem, 12vw, 8rem);
+    font-size: clamp(6rem, 18vw, 12rem);
     color: var(--cyan);
-    margin-bottom: 30px;
-    animation: slide-down 0.6s ease-out 0.2s both;
-    text-shadow: 0 0 40px var(--cyan-glow), 0 0 80px rgba(0, 212, 255, 0.3);
+    margin-bottom: 40px;
+    animation: slide-down 0.6s ease-out 0.2s both, glitch 3s ease-in-out infinite;
+    text-shadow:
+        0 0 40px var(--cyan-glow),
+        0 0 80px rgba(0, 212, 255, 0.3),
+        2px 0 0 rgba(255, 0, 255, 0.3),
+        -2px 0 0 rgba(0, 255, 255, 0.3);
     line-height: 1;
     letter-spacing: 0.02em;
+    position: relative;
+    display: inline-block;
+}
+
+.hero-brand::before {
+    content: "Central E";
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    color: var(--cyan);
+    opacity: 0.8;
+    animation: glitch-clip 4s infinite linear alternate-reverse;
+    text-shadow:
+        -3px 0 0 rgba(255, 0, 255, 0.8),
+        3px 0 0 rgba(0, 255, 255, 0.8);
+    z-index: -1;
+}
+
+.hero-brand::after {
+    content: "Central E";
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    color: var(--cyan);
+    opacity: 0.6;
+    animation: glitch-clip 3s infinite linear alternate;
+    text-shadow:
+        2px 0 0 rgba(0, 255, 255, 0.6),
+        -2px 0 0 rgba(255, 0, 255, 0.6);
+    z-index: -2;
 }
 
 .hero h1 {
@@ -1351,6 +1448,10 @@ body::after {
 
     .hero {
         padding: 40px 20px;
+    }
+
+    .hero-brand {
+        font-size: clamp(3.5rem, 15vw, 6rem);
     }
 
     .hero h1 {
