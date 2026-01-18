@@ -26,9 +26,9 @@ export const renderHome = (root, { state }) => {
 
                 <div class="hero-content">
                     <div class="hero-brand">Central E</div>
-                    <h1>Bet on <span class="highlight">Campus</span><br>Win Rewards</h1>
+                    <h1>The admin <span class="highlight">hates</span><br>this website</h1>
                     <p class="hero-subtitle">
-                        Place bets on campus events with virtual points. Win real rewards like homework help, AI credits, and exclusive perks.
+                        Welcome to the better myefrei. Place bets on campus events, see your next courses, chat with your friends or send them files and be reminded of what you have to do next to stay productive. Bet on funny shit and win virtual points, rig bets, inside trade, and do what you must to stay on top of the school's leaderboard. Or, cash out your points for homework help, AI credits, and exclusive perks. Your choice.
                     </p>
                     <div class="hero-actions">
                         <a class="btn primary large" href="/signup" data-link>Start Betting</a>
@@ -38,15 +38,15 @@ export const renderHome = (root, { state }) => {
                     <div class="hero-stats">
                         <div class="stat">
                             <span class="stat-value">1000</span>
-                            <span class="stat-label">Starting Points</span>
+                            <span class="stat-label">Starting Points, No real money</span>
                         </div>
                         <div class="stat">
-                            <span class="stat-value">0%</span>
-                            <span class="stat-label">Real Money</span>
+                            <span class="stat-value">0</span>
+                            <span class="stat-label">Moderation</span>
                         </div>
                         <div class="stat">
-                            <span class="stat-value">Live</span>
-                            <span class="stat-label">Updates</span>
+                            <span class="stat-value">Propose bets</span>
+                            <span class="stat-label">Yourself</span>
                         </div>
                     </div>
                 </div>

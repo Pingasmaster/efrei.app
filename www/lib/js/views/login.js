@@ -1,4 +1,4 @@
-export const renderLogin = (root, { api, state, updateStatus, navigate }) => {
+export const renderLogin = (root, { api, state, navigate }) => {
     root.innerHTML = `
         <div class="login-container">
             <div class="login-wrapper">
@@ -82,7 +82,6 @@ export const renderLogin = (root, { api, state, updateStatus, navigate }) => {
                 state.setRefreshToken(data.refreshToken);
             }
             setStatus("Signed in successfully!", "success");
-            updateStatus();
             if (typeof navigate === "function") {
                 setTimeout(() => navigate("/"), 600);
             }

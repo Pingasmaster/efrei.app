@@ -8,7 +8,6 @@ import { renderSignup } from "./views/signup.js";
 import { renderNotFound } from "./views/not-found.js";
 
 const viewRoot = document.querySelector("#view");
-const statusEl = document.querySelector("[data-auth-status]");
 const rawApiBase = document.querySelector("meta[name=api-base]")?.content?.trim();
 let apiBase = rawApiBase || window.location.origin;
 if (apiBase.startsWith("/")) {
@@ -18,11 +17,6 @@ if (apiBase.startsWith("/")) {
 const state = createState();
 const api = createApi({ baseUrl: apiBase, state });
 let cleanupView = null;
-
-const updateStatus = () => {
-    if (!statusEl) return;
-    statusEl.textContent = state.token ? "Signed in" : "Guest";
-};
 
 const updateActiveLinks = (path) => {
     const navLinks = document.querySelectorAll("a[data-link]");
@@ -51,10 +45,9 @@ createRouter({
             cleanupView = null;
         }
         if (typeof view === "function") {
-            cleanupView = view(viewRoot, { api, state, updateStatus, path, navigate }) || null;
+            cleanupView = view(viewRoot, { api, state, path, navigate }) || null;
         }
         document.title = path === "/" ? "Central E" : `Central E · ${path.replace("/", "")}`;
-        updateStatus();
         updateActiveLinks(path);
     }
 });
@@ -80,6 +73,5 @@ const setupRealtime = () => {
     stream.connect();
 };
 
-state.subscribe(updateStatus);
 registerServiceWorker();
 setupRealtime();

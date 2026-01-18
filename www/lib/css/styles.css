@@ -308,6 +308,11 @@ body::after {
     display: flex;
     gap: 30px;
     align-items: center;
+    margin-left: auto;
+}
+
+.nav .btn {
+    min-width: 140px;
 }
 
 .nav a {
@@ -350,14 +355,6 @@ body::after {
     transform: scaleX(1);
 }
 
-.nav-status {
-    color: var(--white-subtle);
-    font-size: 0.85rem;
-    padding: 6px 14px;
-    background: var(--glass);
-    border: 1px solid var(--glass-border);
-    border-radius: 20px;
-}
 
 /* Buttons */
 .btn {
@@ -443,17 +440,6 @@ body::after {
     flex: 1;
 }
 
-/* Footer */
-.site-footer {
-    padding: 30px 40px;
-    text-align: center;
-    color: var(--white-subtle);
-    font-size: 0.85rem;
-    border-top: 1px solid var(--glass-border);
-    background: rgba(10, 10, 15, 0.5);
-    backdrop-filter: blur(10px);
-    letter-spacing: 0.05em;
-}
 
 /* ========================================
    HOME PAGE

@@ -1,4 +1,4 @@
-export const renderSignup = (root, { api, state, updateStatus, navigate }) => {
+export const renderSignup = (root, { api, state, navigate }) => {
     root.innerHTML = `
         <div class="signup-container">
             <div class="signup-header">
@@ -88,7 +88,6 @@ export const renderSignup = (root, { api, state, updateStatus, navigate }) => {
                 if (data?.refreshToken && typeof state?.setRefreshToken === "function") {
                     state.setRefreshToken(data.refreshToken);
                 }
-                updateStatus?.();
                 setStatus("Account created successfully!", "success");
                 if (typeof navigate === "function") {
                     setTimeout(() => navigate("/"), 600);
