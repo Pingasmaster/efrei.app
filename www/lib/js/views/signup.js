@@ -2,55 +2,55 @@ export const renderSignup = (root, { api, state, navigate }) => {
     root.innerHTML = `
         <div class="signup-container">
             <div class="signup-header">
-                <span class="auth-badge">Join the Platform</span>
-                <h1>Start Your<br><span>Betting Journey</span></h1>
-                <p>Create an account and get 1000 free points to start betting on campus events.</p>
+                <span class="auth-badge">Rejoindre la plateforme</span>
+                <h1>Commencez votre<br><span>experience Central E</span></h1>
+                <p>Creez un compte et accedez a toutes vos ressources EFREI en un seul endroit.</p>
             </div>
 
             <div class="signup-content">
                 <div class="signup-benefits left">
                     <div class="benefit-card">
                         <div class="benefit-number">01</div>
-                        <h3>Free Starting Points</h3>
-                        <p>Every new member gets 1000 points to start betting right away. No deposit required.</p>
+                        <h3>Emploi du temps</h3>
+                        <p>Consultez votre prochain cours en un clin d'oeil avec toutes les informations essentielles.</p>
                     </div>
                     <div class="benefit-card">
                         <div class="benefit-number">02</div>
-                        <h3>Campus Community</h3>
-                        <p>Join students betting on campus events, from exam results to daily happenings.</p>
+                        <h3>Taches reunies</h3>
+                        <p>Retrouvez tous vos devoirs Moodle et Teams au meme endroit, avec leurs echeances.</p>
                     </div>
                 </div>
 
                 <div class="signup-form-wrapper">
                     <form id="signup-form" class="form">
                         <label class="field">
-                            <span>Full Name</span>
-                            <input type="text" name="name" autocomplete="name" placeholder="Your name" required>
+                            <span>Nom complet</span>
+                            <input type="text" name="name" autocomplete="name" placeholder="Votre nom" required>
                         </label>
                         <label class="field">
                             <span>Email</span>
-                            <input type="email" name="email" autocomplete="email" placeholder="you@efrei.fr" required>
+                            <input type="email" name="email" autocomplete="email" placeholder="vous@efrei.fr" required>
                         </label>
                         <label class="field">
-                            <span>Password</span>
-                            <input type="password" name="password" autocomplete="new-password" minlength="6" placeholder="Create a password" required>
+                            <span>Mot de passe</span>
+                            <input type="password" name="password" autocomplete="new-password" minlength="6" placeholder="Creez un mot de passe" required>
                         </label>
-                        <button class="btn primary" type="submit">Create Account</button>
+                        <button class="btn primary" type="submit">Creer mon compte</button>
                         <div class="form-status" role="status" aria-live="polite"></div>
                     </form>
-                    <p class="form-note">Already have an account? <a href="/login" data-link>Sign in</a></p>
+                    <p class="form-note">Deja un compte? <a href="/login" data-link>Se connecter</a></p>
                 </div>
 
                 <div class="signup-benefits right">
                     <div class="benefit-card">
                         <div class="benefit-number">03</div>
-                        <h3>Real Rewards</h3>
-                        <p>Exchange your points for homework help, AI queries, priority support, and more.</p>
+                        <h3>Acces rapide</h3>
+                        <p>Ouvrez directement Moodle et Teams depuis chaque cours en un seul clic.</p>
                     </div>
                     <div class="benefit-card">
                         <div class="benefit-number">04</div>
-                        <h3>Safe and Fun</h3>
-                        <p>No real money involved. Just friendly competition and exciting campus events.</p>
+                        <h3>Vue d'ensemble</h3>
+                        <p>Gardez une vue complete sur votre journee et vos prochaines echeances.</p>
                     </div>
                 </div>
             </div>
@@ -74,7 +74,7 @@ export const renderSignup = (root, { api, state, navigate }) => {
         setStatus("");
         submit.disabled = true;
         submit.dataset.originalText = submit.dataset.originalText || submit.textContent;
-        submit.textContent = "Creating account...";
+        submit.textContent = "Creation en cours...";
 
         const formData = new FormData(form);
         try {
@@ -88,21 +88,25 @@ export const renderSignup = (root, { api, state, navigate }) => {
                 if (data?.refreshToken && typeof state?.setRefreshToken === "function") {
                     state.setRefreshToken(data.refreshToken);
                 }
-                setStatus("Account created successfully!", "success");
+                setStatus("Compte cree avec succes!", "success");
+
+                // Trigger onboarding for new users
+                state.setShowOnboarding(true);
+
                 if (typeof navigate === "function") {
-                    setTimeout(() => navigate("/"), 600);
+                    setTimeout(() => navigate("/dashboard"), 600);
                 }
             } else {
-                setStatus("Account created! You can now sign in.", "success");
+                setStatus("Compte cree! Vous pouvez maintenant vous connecter.", "success");
                 if (typeof navigate === "function") {
                     setTimeout(() => navigate("/login"), 800);
                 }
             }
         } catch (error) {
-            setStatus(error.message || "Signup failed. Please try again.", "error");
+            setStatus(error.message || "Echec de l'inscription. Veuillez reessayer.", "error");
         } finally {
             submit.disabled = false;
-            submit.textContent = submit.dataset.originalText || "Create Account";
+            submit.textContent = submit.dataset.originalText || "Creer mon compte";
         }
     });
 };

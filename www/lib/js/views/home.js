@@ -1,7 +1,7 @@
 const formatTime = (value) => {
-    if (!value) return "Soon";
+    if (!value) return "Bientot";
     const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return "Soon";
+    if (Number.isNaN(date.getTime())) return "Bientot";
     return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 };
 
@@ -26,27 +26,30 @@ export const renderHome = (root, { state }) => {
 
                 <div class="hero-content">
                     <div class="hero-brand">Central E</div>
-                    <h1>The admin <span class="highlight">hates</span><br>this website</h1>
+                    <h1>L'admin <span class="highlight">deteste</span><br>ce site</h1>
                     <p class="hero-subtitle">
-                        Welcome to the better myefrei. Place bets on campus events, see your next courses, chat with your friends or send them files and be reminded of what you have to do next to stay productive. Bet on funny shit and win virtual points, rig bets, inside trade, and do what you must to stay on top of the school's leaderboard. Or, cash out your points for homework help, AI credits, and exclusive perks. Your choice.
+                        Bienvenue sur le meilleur myefrei. Consultez votre emploi du temps, vos prochains cours,
+                        retrouvez toutes vos taches Moodle et Teams au meme endroit. Pariez sur des evenements
+                        du campus, gagnez des points virtuels et echangez-les contre de l'aide aux devoirs,
+                        des credits IA et des avantages exclusifs.
                     </p>
                     <div class="hero-actions">
-                        <a class="btn primary large" href="/signup" data-link>Start Betting</a>
-                        <a class="btn ghost large" href="#markets">View Markets</a>
+                        <a class="btn primary large" href="/signup" data-link>Commencer</a>
+                        <a class="btn ghost large" href="#markets">Voir les paris</a>
                     </div>
 
                     <div class="hero-stats">
                         <div class="stat">
                             <span class="stat-value">1000</span>
-                            <span class="stat-label">Starting Points, No real money</span>
+                            <span class="stat-label">Points de depart gratuits</span>
                         </div>
                         <div class="stat">
                             <span class="stat-value">0</span>
                             <span class="stat-label">Moderation</span>
                         </div>
                         <div class="stat">
-                            <span class="stat-value">Propose bets</span>
-                            <span class="stat-label">Yourself</span>
+                            <span class="stat-value">Proposez</span>
+                            <span class="stat-label">Vos propres paris</span>
                         </div>
                     </div>
                 </div>
@@ -55,26 +58,45 @@ export const renderHome = (root, { state }) => {
             <!-- Features Section -->
             <section class="features-section">
                 <div class="section-header">
-                    <span class="section-badge">How It Works</span>
-                    <h2>Simple, Fun, Rewarding</h2>
-                    <p>No real money involved. Just pure campus competition.</p>
+                    <span class="section-badge">Comment ca marche</span>
+                    <h2>Simple, Fun, Gratifiant</h2>
+                    <p>Pas d'argent reel. Juste de la competition entre etudiants.</p>
                 </div>
 
                 <div class="features-grid">
                     <div class="feature-card">
-                        <div class="feature-icon">+</div>
-                        <h3>Get Free Points</h3>
-                        <p>Start with 1000 points for free. No deposit required, no credit card needed.</p>
+                        <div class="feature-icon">
+                            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
+                                <line x1="16" y1="2" x2="16" y2="6"/>
+                                <line x1="8" y1="2" x2="8" y2="6"/>
+                                <line x1="3" y1="10" x2="21" y2="10"/>
+                            </svg>
+                        </div>
+                        <h3>Emploi du temps</h3>
+                        <p>Consultez votre prochain cours avec salle, batiment et professeur. Tout en un clin d'oeil.</p>
                     </div>
                     <div class="feature-card">
-                        <div class="feature-icon">*</div>
-                        <h3>Bet on Events</h3>
-                        <p>From exam results to campus happenings - bet on what matters to students.</p>
+                        <div class="feature-icon">
+                            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                                <polyline points="14 2 14 8 20 8"/>
+                                <line x1="16" y1="13" x2="8" y2="13"/>
+                                <line x1="16" y1="17" x2="8" y2="17"/>
+                            </svg>
+                        </div>
+                        <h3>Taches unifiees</h3>
+                        <p>Moodle, Teams... Toutes vos taches et devoirs reunis au meme endroit avec leurs echeances.</p>
                     </div>
                     <div class="feature-card">
-                        <div class="feature-icon">></div>
-                        <h3>Win Rewards</h3>
-                        <p>Exchange points for homework help, AI queries, priority support, and more.</p>
+                        <div class="feature-icon">
+                            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="12" cy="8" r="7"/>
+                                <polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/>
+                            </svg>
+                        </div>
+                        <h3>Gagnez des recompenses</h3>
+                        <p>Echangez vos points contre de l'aide aux devoirs, des credits IA et bien plus encore.</p>
                     </div>
                 </div>
             </section>
@@ -83,10 +105,10 @@ export const renderHome = (root, { state }) => {
             <section class="markets-section" id="markets">
                 <div class="markets-header">
                     <div class="markets-title">
-                        <h2>Live Markets</h2>
-                        <p>Real-time odds on campus events</p>
+                        <h2>Paris en direct</h2>
+                        <p>Cotes en temps reel sur les evenements du campus</p>
                     </div>
-                    <span class="status-pill" data-odds-status>Offline</span>
+                    <span class="status-pill" data-odds-status>Hors ligne</span>
                 </div>
 
                 <div class="markets-layout">
@@ -94,21 +116,21 @@ export const renderHome = (root, { state }) => {
 
                     <aside class="bet-slip">
                         <div class="bet-slip-header">
-                            <h3>Bet Slip</h3>
+                            <h3>Bulletin de pari</h3>
                             <span class="badge" data-slip-count>0</span>
                         </div>
                         <div class="bet-slip-list" data-slip-list></div>
                         <div class="bet-slip-summary">
                             <label class="field">
-                                <span>Stake (points)</span>
-                                <input type="number" min="1" value="10" placeholder="Enter stake" data-stake>
+                                <span>Mise (points)</span>
+                                <input type="number" min="1" value="10" placeholder="Entrez votre mise" data-stake>
                             </label>
                             <div class="summary-row">
-                                <span>Potential Return</span>
+                                <span>Gain potentiel</span>
                                 <strong data-return>0 pts</strong>
                             </div>
-                            <button class="btn primary" type="button" data-place-bet disabled>Place Bet</button>
-                            <button class="btn ghost" type="button" data-clear-slip>Clear Slip</button>
+                            <button class="btn primary" type="button" data-place-bet disabled>Placer le pari</button>
+                            <button class="btn ghost" type="button" data-clear-slip>Vider</button>
                             <div class="form-status" role="status" aria-live="polite" data-slip-status></div>
                         </div>
                     </aside>
@@ -130,7 +152,7 @@ export const renderHome = (root, { state }) => {
     const renderOdds = (snapshot) => {
         const selectedIds = new Set(snapshot.betslip.map((item) => item.id));
         if (!snapshot.odds.length) {
-            oddsGrid.innerHTML = `<div class="empty">Waiting for live odds...</div>`;
+            oddsGrid.innerHTML = `<div class="empty">En attente des cotes en direct...</div>`;
             return;
         }
 
@@ -177,7 +199,7 @@ export const renderHome = (root, { state }) => {
     const renderSlip = (snapshot) => {
         slipCount.textContent = snapshot.betslip.length;
         if (!snapshot.betslip.length) {
-            slipList.innerHTML = `<div class="empty">No selections yet</div>`;
+            slipList.innerHTML = `<div class="empty">Aucune selection</div>`;
             placeBetButton.disabled = true;
             returnValue.textContent = "0 pts";
             return;
@@ -192,7 +214,7 @@ export const renderHome = (root, { state }) => {
                             <span class="slip-label">${label}</span>
                             <span class="slip-odds">${item.price.toFixed(2)}</span>
                         </div>
-                        <button class="slip-remove" type="button" data-slip-remove="${item.id}">Remove</button>
+                        <button class="slip-remove" type="button" data-slip-remove="${item.id}">Retirer</button>
                     </div>
                 `;
             })
@@ -207,14 +229,14 @@ export const renderHome = (root, { state }) => {
 
     const renderStatus = (snapshot) => {
         const statusMap = {
-            connecting: "Connecting",
-            connected: "Live",
-            disconnected: "Disconnected",
-            error: "Error",
-            closed: "Closed",
-            offline: "Offline"
+            connecting: "Connexion...",
+            connected: "En direct",
+            disconnected: "Deconnecte",
+            error: "Erreur",
+            closed: "Ferme",
+            offline: "Hors ligne"
         };
-        statusPill.textContent = statusMap[snapshot.oddsStatus] || "Offline";
+        statusPill.textContent = statusMap[snapshot.oddsStatus] || "Hors ligne";
         statusPill.dataset.status = snapshot.oddsStatus;
     };
 
@@ -253,7 +275,7 @@ export const renderHome = (root, { state }) => {
     };
 
     const handlePlaceBet = () => {
-        slipStatus.textContent = "Bet placed successfully!";
+        slipStatus.textContent = "Pari place avec succes!";
         slipStatus.classList.remove("error");
         slipStatus.classList.add("success");
         state.clearSlip();
@@ -261,7 +283,7 @@ export const renderHome = (root, { state }) => {
 
     const handleClearSlip = () => {
         state.clearSlip();
-        slipStatus.textContent = "Slip cleared";
+        slipStatus.textContent = "Bulletin vide";
         slipStatus.classList.remove("error");
         slipStatus.classList.add("success");
     };

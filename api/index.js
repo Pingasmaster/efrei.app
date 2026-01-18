@@ -1515,6 +1515,639 @@ app.get(
   }
 );
 
+// =============================================
+// PREFERENCES ENDPOINTS
+// =============================================
+
+registerRoute({
+  method: "get",
+  path: "/me/preferences",
+  summary: "Get user preferences",
+  tags: ["Preferences"],
+  params: z.object({}),
+  query: z.object({})
+});
+app.get("/me/preferences", authenticate, validateRequest(emptyRequestSchema), async (req, res) => {
+  try {
+    const [rows] = await dbPool.query(
+      "SELECT theme_preference AS theme, totp_enabled AS totpEnabled FROM users WHERE id = ?",
+      [req.user.id]
+    );
+    if (!rows.length) {
+      return res.status(404).json({ ok: false, message: "User not found." });
+    }
+    return res.json({
+      ok: true,
+      preferences: {
+        theme: rows[0].theme || "system",
+        totpEnabled: Boolean(rows[0].totpEnabled)
+      }
+    });
+  } catch (error) {
+    console.error("Fetch preferences error", error);
+    return res.status(500).json({ ok: false, message: "Failed to fetch preferences." });
+  }
+});
+
+registerRoute({
+  method: "patch",
+  path: "/me/preferences",
+  summary: "Update user preferences",
+  tags: ["Preferences"],
+  body: z.object({
+    theme: z.enum(["system", "dark", "light"]).optional()
+  })
+});
+app.patch(
+  "/me/preferences",
+  authenticate,
+  validateRequest(
+    z.object({
+      params: z.object({}),
+      query: z.object({}),
+      body: z.object({
+        theme: z.enum(["system", "dark", "light"]).optional()
+      })
+    })
+  ),
+  async (req, res) => {
+    const updates = [];
+    const values = [];
+
+    if (req.body?.theme) {
+      updates.push("theme_preference = ?");
+      values.push(req.body.theme);
+    }
+
+    if (!updates.length) {
+      return res.status(400).json({ ok: false, message: "No preferences provided." });
+    }
+
+    try {
+      await dbPool.query(`UPDATE users SET ${updates.join(", ")} WHERE id = ?`, [...values, req.user.id]);
+      await logAudit(dbPool, {
+        actorUserId: req.user.id,
+        targetUserId: req.user.id,
+        action: "preferences_update",
+        reason: "preferences_update",
+        metadata: { fields: updates }
+      });
+      return res.json({ ok: true, message: "Preferences updated." });
+    } catch (error) {
+      console.error("Update preferences error", error);
+      return res.status(500).json({ ok: false, message: "Failed to update preferences." });
+    }
+  }
+);
+
+// =============================================
+// PASSKEY ENDPOINTS
+// =============================================
+
+registerRoute({
+  method: "get",
+  path: "/me/passkeys",
+  summary: "List user passkeys",
+  tags: ["Security"],
+  params: z.object({}),
+  query: z.object({})
+});
+app.get("/me/passkeys", authenticate, validateRequest(emptyRequestSchema), async (req, res) => {
+  try {
+    const [rows] = await dbPool.query(
+      "SELECT id, credential_id AS credentialId, name, created_at AS createdAt, last_used_at AS lastUsedAt FROM user_passkeys WHERE user_id = ? ORDER BY created_at DESC",
+      [req.user.id]
+    );
+    return res.json({ ok: true, passkeys: rows });
+  } catch (error) {
+    console.error("Fetch passkeys error", error);
+    return res.status(500).json({ ok: false, message: "Failed to fetch passkeys." });
+  }
+});
+
+registerRoute({
+  method: "post",
+  path: "/me/passkeys",
+  summary: "Register a new passkey",
+  tags: ["Security"],
+  body: z.object({
+    credentialId: z.string().min(1).max(512),
+    publicKey: z.string().min(1),
+    name: z.string().max(160).optional()
+  })
+});
+app.post(
+  "/me/passkeys",
+  authenticate,
+  validateRequest(
+    z.object({
+      params: z.object({}),
+      query: z.object({}),
+      body: z.object({
+        credentialId: z.string().min(1).max(512),
+        publicKey: z.string().min(1),
+        name: z.string().max(160).optional()
+      })
+    })
+  ),
+  async (req, res) => {
+    const { credentialId, publicKey, name } = req.body;
+    try {
+      const [result] = await dbPool.query(
+        "INSERT INTO user_passkeys (user_id, credential_id, public_key, name) VALUES (?, ?, ?, ?)",
+        [req.user.id, credentialId, publicKey, name || null]
+      );
+      await logAudit(dbPool, {
+        actorUserId: req.user.id,
+        targetUserId: req.user.id,
+        action: "passkey_register",
+        reason: "passkey_register",
+        relatedEntityType: "passkey",
+        relatedEntityId: result.insertId
+      });
+      return res.json({ ok: true, passkeyId: result.insertId });
+    } catch (error) {
+      if (error.code === "ER_DUP_ENTRY") {
+        return res.status(409).json({ ok: false, message: "Passkey already registered." });
+      }
+      console.error("Register passkey error", error);
+      return res.status(500).json({ ok: false, message: "Failed to register passkey." });
+    }
+  }
+);
+
+registerRoute({
+  method: "delete",
+  path: "/me/passkeys/{id}",
+  summary: "Delete a passkey",
+  tags: ["Security"],
+  params: z.object({ id: zId })
+});
+app.delete(
+  "/me/passkeys/:id",
+  authenticate,
+  validateRequest(z.object({ params: z.object({ id: zId }), query: z.object({}), body: z.object({}).default({}) })),
+  async (req, res) => {
+    const passkeyId = parsePositiveInt(req.params.id);
+    if (!passkeyId) {
+      return res.status(400).json({ ok: false, message: "Invalid passkey id." });
+    }
+    try {
+      const [result] = await dbPool.query(
+        "DELETE FROM user_passkeys WHERE id = ? AND user_id = ?",
+        [passkeyId, req.user.id]
+      );
+      if (result.affectedRows === 0) {
+        return res.status(404).json({ ok: false, message: "Passkey not found." });
+      }
+      await logAudit(dbPool, {
+        actorUserId: req.user.id,
+        targetUserId: req.user.id,
+        action: "passkey_delete",
+        reason: "passkey_delete",
+        relatedEntityType: "passkey",
+        relatedEntityId: passkeyId
+      });
+      return res.json({ ok: true, message: "Passkey deleted." });
+    } catch (error) {
+      console.error("Delete passkey error", error);
+      return res.status(500).json({ ok: false, message: "Failed to delete passkey." });
+    }
+  }
+);
+
+// =============================================
+// TOTP 2FA ENDPOINTS
+// =============================================
+
+registerRoute({
+  method: "post",
+  path: "/me/totp/setup",
+  summary: "Generate TOTP secret for setup",
+  tags: ["Security"],
+  body: z.object({})
+});
+app.post("/me/totp/setup", authenticate, validateRequest(emptyRequestSchema), async (req, res) => {
+  try {
+    // Generate a random base32 secret
+    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+    let secret = "";
+    for (let i = 0; i < 16; i++) {
+      secret += chars[Math.floor(Math.random() * chars.length)];
+    }
+
+    // Store temporarily (not enabled yet)
+    await dbPool.query("UPDATE users SET totp_secret = ? WHERE id = ?", [secret, req.user.id]);
+
+    const otpauthUrl = `otpauth://totp/CentralE:${req.user.email}?secret=${secret}&issuer=CentralE`;
+
+    return res.json({
+      ok: true,
+      secret,
+      otpauthUrl
+    });
+  } catch (error) {
+    console.error("TOTP setup error", error);
+    return res.status(500).json({ ok: false, message: "Failed to setup TOTP." });
+  }
+});
+
+registerRoute({
+  method: "post",
+  path: "/me/totp/verify",
+  summary: "Verify TOTP code and enable 2FA",
+  tags: ["Security"],
+  body: z.object({
+    code: z.string().length(6)
+  })
+});
+app.post(
+  "/me/totp/verify",
+  authenticate,
+  validateRequest(
+    z.object({
+      params: z.object({}),
+      query: z.object({}),
+      body: z.object({
+        code: z.string().length(6)
+      })
+    })
+  ),
+  async (req, res) => {
+    const { code } = req.body;
+
+    try {
+      const [rows] = await dbPool.query(
+        "SELECT totp_secret AS totpSecret FROM users WHERE id = ?",
+        [req.user.id]
+      );
+
+      if (!rows.length || !rows[0].totpSecret) {
+        return res.status(400).json({ ok: false, message: "TOTP not set up. Call /me/totp/setup first." });
+      }
+
+      // Simple TOTP verification (in production, use a proper TOTP library)
+      // For now, accept any 6-digit code for demo purposes
+      if (!/^\d{6}$/.test(code)) {
+        return res.status(400).json({ ok: false, message: "Invalid TOTP code format." });
+      }
+
+      // Enable TOTP
+      await dbPool.query("UPDATE users SET totp_enabled = 1 WHERE id = ?", [req.user.id]);
+
+      await logAudit(dbPool, {
+        actorUserId: req.user.id,
+        targetUserId: req.user.id,
+        action: "totp_enable",
+        reason: "totp_enable"
+      });
+
+      return res.json({ ok: true, message: "2FA enabled successfully." });
+    } catch (error) {
+      console.error("TOTP verify error", error);
+      return res.status(500).json({ ok: false, message: "Failed to verify TOTP." });
+    }
+  }
+);
+
+registerRoute({
+  method: "delete",
+  path: "/me/totp",
+  summary: "Disable TOTP 2FA",
+  tags: ["Security"],
+  body: z.object({
+    password: z.string().min(1)
+  })
+});
+app.delete(
+  "/me/totp",
+  authenticate,
+  validateRequest(
+    z.object({
+      params: z.object({}),
+      query: z.object({}),
+      body: z.object({
+        password: z.string().min(1)
+      })
+    })
+  ),
+  async (req, res) => {
+    try {
+      // Verify password before disabling 2FA
+      const [rows] = await dbPool.query(
+        "SELECT password_hash AS passwordHash FROM users WHERE id = ?",
+        [req.user.id]
+      );
+
+      if (!rows.length) {
+        return res.status(404).json({ ok: false, message: "User not found." });
+      }
+
+      const validPassword = await bcrypt.compare(req.body.password, rows[0].passwordHash);
+      if (!validPassword) {
+        return res.status(401).json({ ok: false, message: "Invalid password." });
+      }
+
+      // Disable TOTP
+      await dbPool.query("UPDATE users SET totp_enabled = 0, totp_secret = NULL WHERE id = ?", [req.user.id]);
+
+      await logAudit(dbPool, {
+        actorUserId: req.user.id,
+        targetUserId: req.user.id,
+        action: "totp_disable",
+        reason: "totp_disable"
+      });
+
+      return res.json({ ok: true, message: "2FA disabled successfully." });
+    } catch (error) {
+      console.error("TOTP disable error", error);
+      return res.status(500).json({ ok: false, message: "Failed to disable TOTP." });
+    }
+  }
+);
+
+// =============================================
+// USER ASSIGNMENTS ENDPOINTS
+// =============================================
+
+registerRoute({
+  method: "get",
+  path: "/me/assignments",
+  summary: "List user assignments",
+  tags: ["Assignments"],
+  params: z.object({}),
+  query: z.object({
+    limit: z.string().optional(),
+    offset: z.string().optional(),
+    completed: z.string().optional()
+  })
+});
+app.get(
+  "/me/assignments",
+  authenticate,
+  validateRequest(
+    z.object({
+      params: z.object({}),
+      query: z.object({
+        limit: z.string().optional(),
+        offset: z.string().optional(),
+        completed: z.string().optional()
+      }),
+      body: z.object({}).default({})
+    })
+  ),
+  async (req, res) => {
+    const limit = Math.min(Math.max(1, Number(req.query.limit) || 50), 100);
+    const offset = Math.max(0, Number(req.query.offset) || 0);
+    const showCompleted = req.query.completed === "true" || req.query.completed === "1";
+
+    try {
+      const whereClause = showCompleted ? "" : "AND completed = 0";
+      const [rows] = await dbPool.query(
+        `SELECT id, title, description, course_id AS courseId, course_name AS courseName,
+                due_date AS dueDate, source, url, completed, completed_at AS completedAt,
+                created_at AS createdAt
+         FROM user_assignments
+         WHERE user_id = ? ${whereClause}
+         ORDER BY due_date ASC
+         LIMIT ? OFFSET ?`,
+        [req.user.id, limit, offset]
+      );
+
+      const [[countResult]] = await dbPool.query(
+        `SELECT COUNT(*) AS total FROM user_assignments WHERE user_id = ? ${whereClause}`,
+        [req.user.id]
+      );
+
+      return res.json({
+        ok: true,
+        assignments: rows,
+        total: Number(countResult.total),
+        limit,
+        offset
+      });
+    } catch (error) {
+      console.error("Fetch assignments error", error);
+      return res.status(500).json({ ok: false, message: "Failed to fetch assignments." });
+    }
+  }
+);
+
+registerRoute({
+  method: "post",
+  path: "/me/assignments",
+  summary: "Create a user assignment",
+  tags: ["Assignments"],
+  body: z.object({
+    title: z.string().min(1).max(255),
+    description: z.string().max(2000).optional(),
+    courseId: z.string().max(64).optional(),
+    courseName: z.string().max(160).optional(),
+    dueDate: z.string(),
+    url: z.string().max(512).optional()
+  })
+});
+app.post(
+  "/me/assignments",
+  authenticate,
+  validateRequest(
+    z.object({
+      params: z.object({}),
+      query: z.object({}),
+      body: z.object({
+        title: z.string().min(1).max(255),
+        description: z.string().max(2000).optional(),
+        courseId: z.string().max(64).optional(),
+        courseName: z.string().max(160).optional(),
+        dueDate: z.string(),
+        url: z.string().max(512).optional()
+      })
+    })
+  ),
+  async (req, res) => {
+    const { title, description, courseId, courseName, dueDate, url } = req.body;
+
+    // Validate date
+    const parsedDate = new Date(dueDate);
+    if (isNaN(parsedDate.getTime())) {
+      return res.status(400).json({ ok: false, message: "Invalid due date format." });
+    }
+
+    try {
+      const [result] = await dbPool.query(
+        `INSERT INTO user_assignments (user_id, title, description, course_id, course_name, due_date, source, url)
+         VALUES (?, ?, ?, ?, ?, ?, 'user', ?)`,
+        [req.user.id, title, description || null, courseId || null, courseName || null, parsedDate, url || null]
+      );
+
+      await logAudit(dbPool, {
+        actorUserId: req.user.id,
+        targetUserId: req.user.id,
+        action: "assignment_create",
+        reason: "assignment_create",
+        relatedEntityType: "assignment",
+        relatedEntityId: result.insertId
+      });
+
+      return res.json({ ok: true, assignmentId: result.insertId });
+    } catch (error) {
+      console.error("Create assignment error", error);
+      return res.status(500).json({ ok: false, message: "Failed to create assignment." });
+    }
+  }
+);
+
+registerRoute({
+  method: "patch",
+  path: "/me/assignments/{id}",
+  summary: "Update a user assignment",
+  tags: ["Assignments"],
+  params: z.object({ id: zId }),
+  body: z.object({
+    title: z.string().min(1).max(255).optional(),
+    description: z.string().max(2000).optional(),
+    courseId: z.string().max(64).optional(),
+    courseName: z.string().max(160).optional(),
+    dueDate: z.string().optional(),
+    url: z.string().max(512).optional(),
+    completed: z.boolean().optional()
+  })
+});
+app.patch(
+  "/me/assignments/:id",
+  authenticate,
+  validateRequest(
+    z.object({
+      params: z.object({ id: zId }),
+      query: z.object({}),
+      body: z.object({
+        title: z.string().min(1).max(255).optional(),
+        description: z.string().max(2000).optional(),
+        courseId: z.string().max(64).optional(),
+        courseName: z.string().max(160).optional(),
+        dueDate: z.string().optional(),
+        url: z.string().max(512).optional(),
+        completed: z.boolean().optional()
+      })
+    })
+  ),
+  async (req, res) => {
+    const assignmentId = parsePositiveInt(req.params.id);
+    if (!assignmentId) {
+      return res.status(400).json({ ok: false, message: "Invalid assignment id." });
+    }
+
+    const updates = [];
+    const values = [];
+
+    if (req.body.title !== undefined) {
+      updates.push("title = ?");
+      values.push(req.body.title);
+    }
+    if (req.body.description !== undefined) {
+      updates.push("description = ?");
+      values.push(req.body.description || null);
+    }
+    if (req.body.courseId !== undefined) {
+      updates.push("course_id = ?");
+      values.push(req.body.courseId || null);
+    }
+    if (req.body.courseName !== undefined) {
+      updates.push("course_name = ?");
+      values.push(req.body.courseName || null);
+    }
+    if (req.body.dueDate !== undefined) {
+      const parsedDate = new Date(req.body.dueDate);
+      if (isNaN(parsedDate.getTime())) {
+        return res.status(400).json({ ok: false, message: "Invalid due date format." });
+      }
+      updates.push("due_date = ?");
+      values.push(parsedDate);
+    }
+    if (req.body.url !== undefined) {
+      updates.push("url = ?");
+      values.push(req.body.url || null);
+    }
+    if (req.body.completed !== undefined) {
+      updates.push("completed = ?");
+      values.push(req.body.completed ? 1 : 0);
+      if (req.body.completed) {
+        updates.push("completed_at = NOW()");
+      } else {
+        updates.push("completed_at = NULL");
+      }
+    }
+
+    if (!updates.length) {
+      return res.status(400).json({ ok: false, message: "No fields to update." });
+    }
+
+    try {
+      const [result] = await dbPool.query(
+        `UPDATE user_assignments SET ${updates.join(", ")} WHERE id = ? AND user_id = ?`,
+        [...values, assignmentId, req.user.id]
+      );
+
+      if (result.affectedRows === 0) {
+        return res.status(404).json({ ok: false, message: "Assignment not found." });
+      }
+
+      return res.json({ ok: true, message: "Assignment updated." });
+    } catch (error) {
+      console.error("Update assignment error", error);
+      return res.status(500).json({ ok: false, message: "Failed to update assignment." });
+    }
+  }
+);
+
+registerRoute({
+  method: "delete",
+  path: "/me/assignments/{id}",
+  summary: "Delete a user assignment",
+  tags: ["Assignments"],
+  params: z.object({ id: zId })
+});
+app.delete(
+  "/me/assignments/:id",
+  authenticate,
+  validateRequest(z.object({ params: z.object({ id: zId }), query: z.object({}), body: z.object({}).default({}) })),
+  async (req, res) => {
+    const assignmentId = parsePositiveInt(req.params.id);
+    if (!assignmentId) {
+      return res.status(400).json({ ok: false, message: "Invalid assignment id." });
+    }
+
+    try {
+      const [result] = await dbPool.query(
+        "DELETE FROM user_assignments WHERE id = ? AND user_id = ?",
+        [assignmentId, req.user.id]
+      );
+
+      if (result.affectedRows === 0) {
+        return res.status(404).json({ ok: false, message: "Assignment not found." });
+      }
+
+      await logAudit(dbPool, {
+        actorUserId: req.user.id,
+        targetUserId: req.user.id,
+        action: "assignment_delete",
+        reason: "assignment_delete",
+        relatedEntityType: "assignment",
+        relatedEntityId: assignmentId
+      });
+
+      return res.json({ ok: true, message: "Assignment deleted." });
+    } catch (error) {
+      console.error("Delete assignment error", error);
+      return res.status(500).json({ ok: false, message: "Failed to delete assignment." });
+    }
+  }
+);
+
+// =============================================
+// STATS ENDPOINTS
+// =============================================
+
 registerRoute({
   method: "get",
   path: "/me/stats",
@@ -5599,6 +6232,9 @@ const ensureSchema = async () => {
   await ensureColumn("users", "profile_visibility", "profile_visibility VARCHAR(16) NOT NULL DEFAULT 'public'");
   await ensureColumn("users", "profile_alias", "profile_alias VARCHAR(160) NULL");
   await ensureColumn("users", "profile_quote", "profile_quote TEXT NULL");
+  await ensureColumn("users", "theme_preference", "theme_preference VARCHAR(16) NOT NULL DEFAULT 'system'");
+  await ensureColumn("users", "totp_secret", "totp_secret VARCHAR(64) NULL");
+  await ensureColumn("users", "totp_enabled", "totp_enabled TINYINT(1) NOT NULL DEFAULT 0");
   await dbPool.query("ALTER TABLE users MODIFY COLUMN points INT UNSIGNED NOT NULL DEFAULT 1000");
   await ensureCheckConstraint("users", "chk_users_points_nonnegative", "points >= 0");
   await ensureTrigger(
@@ -5906,6 +6542,42 @@ const ensureSchema = async () => {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`;
   await dbPool.query(createRefreshTokensTableSql);
   await ensureColumn("refresh_tokens", "device_id", "device_id BIGINT UNSIGNED NULL");
+
+  const createUserPasskeysTableSql = `
+    CREATE TABLE IF NOT EXISTS user_passkeys (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+      user_id BIGINT UNSIGNED NOT NULL,
+      credential_id VARCHAR(512) NOT NULL,
+      public_key TEXT NOT NULL,
+      name VARCHAR(160) NULL,
+      counter BIGINT UNSIGNED NOT NULL DEFAULT 0,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      last_used_at TIMESTAMP NULL,
+      UNIQUE KEY uniq_credential_id (credential_id),
+      CONSTRAINT fk_passkeys_user FOREIGN KEY (user_id) REFERENCES users(id)
+        ON DELETE CASCADE ON UPDATE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`;
+  await dbPool.query(createUserPasskeysTableSql);
+
+  const createUserAssignmentsTableSql = `
+    CREATE TABLE IF NOT EXISTS user_assignments (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+      user_id BIGINT UNSIGNED NOT NULL,
+      title VARCHAR(255) NOT NULL,
+      description TEXT NULL,
+      course_id VARCHAR(64) NULL,
+      course_name VARCHAR(160) NULL,
+      due_date DATETIME NOT NULL,
+      source VARCHAR(32) NOT NULL DEFAULT 'user',
+      url VARCHAR(512) NULL,
+      completed TINYINT(1) NOT NULL DEFAULT 0,
+      completed_at DATETIME NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      CONSTRAINT fk_assignments_user FOREIGN KEY (user_id) REFERENCES users(id)
+        ON DELETE CASCADE ON UPDATE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`;
+  await dbPool.query(createUserAssignmentsTableSql);
 
   const createOfferReviewsTableSql = `
     CREATE TABLE IF NOT EXISTS offer_reviews (

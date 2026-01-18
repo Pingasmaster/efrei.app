@@ -5,6 +5,10 @@ import { createOddsStream } from "./realtime.js";
 import { renderHome } from "./views/home.js";
 import { renderLogin } from "./views/login.js";
 import { renderSignup } from "./views/signup.js";
+import { renderDashboard } from "./views/dashboard.js";
+import { renderChat } from "./views/chat.js";
+import { renderSettings } from "./views/settings.js";
+import { showOnboardingOverlay } from "./views/onboarding.js";
 import { renderNotFound } from "./views/not-found.js";
 
 const viewRoot = document.querySelector("#view");
@@ -17,6 +21,7 @@ if (apiBase.startsWith("/")) {
 const state = createState();
 const api = createApi({ baseUrl: apiBase, state });
 let cleanupView = null;
+let cleanupOnboarding = null;
 
 const updateActiveLinks = (path) => {
     const navLinks = document.querySelectorAll("a[data-link]");
@@ -30,25 +35,76 @@ const updateActiveLinks = (path) => {
     });
 };
 
+// Check if onboarding should be shown
+const checkOnboarding = () => {
+    if (state.showOnboarding && !state.onboardingCompleted) {
+        cleanupOnboarding = showOnboardingOverlay(state, () => {
+            cleanupOnboarding = null;
+        });
+    }
+};
+
 const routes = {
     "/": renderHome,
     "/login": renderLogin,
     "/signup": renderSignup,
+    "/dashboard": renderDashboard,
+    "/chat": renderChat,
+    "/settings": renderSettings,
     "/not-found": renderNotFound
+};
+
+// Page titles in French
+const pageTitles = {
+    "/": "Central E",
+    "/login": "Central E - Connexion",
+    "/signup": "Central E - Inscription",
+    "/dashboard": "Central E - Tableau de bord",
+    "/chat": "Central E - Assistant IA",
+    "/settings": "Central E - Parametres",
+    "/not-found": "Central E - Page non trouvee"
 };
 
 createRouter({
     routes,
     onRoute: (path, view, navigate) => {
+        // Cleanup previous view
         if (cleanupView) {
             cleanupView();
             cleanupView = null;
         }
+
+        // Cleanup onboarding if navigating away
+        if (cleanupOnboarding && path !== "/dashboard") {
+            cleanupOnboarding();
+            cleanupOnboarding = null;
+        }
+
+        // Render the view
         if (typeof view === "function") {
             cleanupView = view(viewRoot, { api, state, path, navigate }) || null;
         }
-        document.title = path === "/" ? "Central E" : `Central E · ${path.replace("/", "")}`;
+
+        // Update page title
+        document.title = pageTitles[path] || `Central E - ${path.replace("/", "")}`;
         updateActiveLinks(path);
+
+        // Check if onboarding should be shown (after navigating to dashboard)
+        if (path === "/dashboard") {
+            setTimeout(checkOnboarding, 100);
+        }
+    }
+});
+
+// Subscribe to state changes to handle onboarding
+state.subscribe((snapshot) => {
+    if (snapshot.showOnboarding && !snapshot.onboardingCompleted && !cleanupOnboarding) {
+        // Only show onboarding if we're on the dashboard
+        if (window.location.pathname === "/dashboard") {
+            cleanupOnboarding = showOnboardingOverlay(state, () => {
+                cleanupOnboarding = null;
+            });
+        }
     }
 });
 

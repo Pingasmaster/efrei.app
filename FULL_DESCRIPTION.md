@@ -108,6 +108,28 @@ Champs principaux :
 - `profile_visibility` (`public` | `private`, défaut `public`)
 - `profile_alias` (pseudonyme public optionnel)
 - `profile_quote` (citation optionnelle)
+- `theme_preference` (`system` | `dark` | `light`, défaut `system`)
+- `totp_secret` (VARCHAR(64), secret TOTP pour 2FA)
+- `totp_enabled` (TINYINT, 0 ou 1)
+- `created_at`, `updated_at`
+
+### Table `user_passkeys`
+Stockage des clés d'authentification WebAuthn/Passkey.
+- `id`, `user_id`
+- `credential_id` (identifiant unique de la clé, TEXT)
+- `public_key` (clé publique, TEXT)
+- `name` (nom de la clé, ex: "MacBook Pro")
+- `created_at`
+
+### Table `user_assignments`
+Tâches/devoirs créés par les utilisateurs.
+- `id`, `user_id`
+- `course_id` (optionnel, lien vers un cours)
+- `course_name` (nom du cours affiché)
+- `title` (titre de la tâche)
+- `description` (description détaillée)
+- `due_date` (date d'échéance)
+- `url` (lien optionnel)
 - `created_at`, `updated_at`
 
 ### Tables RBAC (`roles`, `permissions`, `role_permissions`, `user_roles`)
@@ -501,8 +523,89 @@ Toutes les routes sensibles exigent:
 - Restriction: authentifié
 
 #### GET `/me/groups`
-**But :** Groupes auxquels appartient l’utilisateur.
+**But :** Groupes auxquels appartient l'utilisateur.
 - Restriction: authentifié
+
+---
+
+### Preferences & Security
+
+#### GET `/me/preferences`
+**But :** Récupérer les préférences utilisateur.
+- Retour: `{ theme }`
+- Restriction: authentifié
+
+#### PATCH `/me/preferences`
+**But :** Mettre à jour les préférences.
+- Body: `{ theme? }` (`system`, `dark`, ou `light`)
+- Restriction: authentifié
+- Log: `preferences_update`
+
+---
+
+### Passkeys (WebAuthn)
+
+#### GET `/me/passkeys`
+**But :** Lister les passkeys enregistrées.
+- Retour: `{ passkeys: [{ id, name, createdAt }] }`
+- Restriction: authentifié
+
+#### POST `/me/passkeys`
+**But :** Enregistrer une nouvelle passkey.
+- Body: `{ credentialId, publicKey, name }`
+- Restriction: authentifié
+- Log: `passkey_register`
+
+#### DELETE `/me/passkeys/:id`
+**But :** Supprimer une passkey.
+- Restriction: authentifié
+- Log: `passkey_delete`
+
+---
+
+### 2FA TOTP
+
+#### POST `/me/totp/setup`
+**But :** Générer un secret TOTP pour activer la 2FA.
+- Retour: `{ secret, qrCodeUrl }` (URL otpauth:// pour QR code)
+- Restriction: authentifié
+- Note: Le secret n'est pas activé tant que `/me/totp/verify` n'est pas appelé.
+
+#### POST `/me/totp/verify`
+**But :** Vérifier et activer la 2FA.
+- Body: `{ code }` (code TOTP à 6 chiffres)
+- Restriction: authentifié
+- Log: `totp_enable`
+
+#### DELETE `/me/totp`
+**But :** Désactiver la 2FA.
+- Restriction: authentifié
+- Log: `totp_disable`
+
+---
+
+### User Assignments
+
+#### GET `/me/assignments`
+**But :** Lister les tâches créées par l'utilisateur.
+- Query: `limit`, `offset`
+- Restriction: authentifié
+
+#### POST `/me/assignments`
+**But :** Créer une tâche personnelle.
+- Body: `{ title, courseId?, courseName, dueDate, description?, url? }`
+- Restriction: authentifié
+- Log: `assignment_create`
+
+#### PATCH `/me/assignments/:id`
+**But :** Modifier une tâche.
+- Body: `{ title?, courseId?, courseName?, dueDate?, description?, url? }`
+- Restriction: authentifié (propriétaire uniquement)
+
+#### DELETE `/me/assignments/:id`
+**But :** Supprimer une tâche.
+- Restriction: authentifié (propriétaire uniquement)
+- Log: `assignment_delete`
 
 ---
 
@@ -782,3 +885,169 @@ Les tests sont dans `tests/` (package séparé).
 - Variables optionnelles :
   - `API_URL` (par défaut `http://localhost:4000`)
   - `GATEWAY_URL` (par défaut `http://localhost:3000`)
+
+---
+
+## 11) Frontend (SPA)
+
+Le frontend est une Single Page Application (SPA) vanilla JavaScript avec routing côté client.
+
+### 11.1 Structure
+
+```
+www/lib/js/
+├── app.js          # Point d'entrée, routing, state management
+├── api.js          # Client HTTP pour l'API
+├── router.js       # Routeur SPA
+├── state.js        # State management observable
+├── realtime.js     # WebSocket pour les cotes en temps réel
+├── data/
+│   └── mock-data.js  # Données mock pour le dashboard (emploi du temps, devoirs)
+└── views/
+    ├── home.js       # Page d'accueil
+    ├── login.js      # Connexion
+    ├── signup.js     # Inscription
+    ├── dashboard.js  # Tableau de bord (emploi du temps, devoirs)
+    ├── chat.js       # Assistant IA (Ollama)
+    ├── settings.js   # Paramètres compte
+    ├── onboarding.js # Onboarding overlay
+    └── not-found.js  # 404
+```
+
+### 11.2 Routes
+
+| Route       | Vue                | Description                              |
+|-------------|--------------------|-----------------------------------------|
+| `/`         | Home               | Page d'accueil avec logo et liens       |
+| `/login`    | Login              | Formulaire de connexion                 |
+| `/signup`   | Signup             | Formulaire d'inscription                |
+| `/dashboard`| Dashboard          | Emploi du temps et tâches à venir       |
+| `/chat`     | Chat IA            | Interface chat avec Ollama              |
+| `/settings` | Settings           | Paramètres du compte                    |
+
+### 11.3 Fonctionnalités Frontend
+
+#### Dashboard (Tableau de bord)
+
+- **Emploi du temps** : Affichage du jour avec navigation (précédent/suivant)
+- **Prochain cours** : Carte détaillée avec salle, bâtiment, professeur, liens Moodle/Teams
+- **Tâches à venir** : Liste des devoirs triés par date d'échéance
+- **Création de tâches** : Les utilisateurs peuvent créer leurs propres tâches depuis le panneau étendu
+  - Attribution à un cours existant ou "Personnel"
+  - Date d'échéance, description, lien optionnel
+  - Stockage local + synchronisation avec le backend si authentifié
+- **Sources multiples** : Moodle (M), Teams (T), Utilisateur (U)
+
+#### Assistant IA (Chat)
+
+Page de chat connectée à une instance **Ollama** locale :
+
+- **Connexion Ollama** : URL configurable (défaut: `http://localhost:11434`)
+- **Sélection de modèle** : Liste dynamique des modèles disponibles sur l'instance
+- **Fichiers en contexte** : Upload de fichiers pour enrichir le contexte de la conversation
+- **Streaming** : Réponses en temps réel avec indicateur de frappe
+- **Historique** : Conservation des messages dans la session
+- **Configuration** : Panel de paramètres pour l'URL Ollama et le modèle par défaut
+
+Configuration stockée en localStorage :
+- `efrei_ollama_url` : URL de l'instance Ollama
+- `efrei_ollama_model` : Modèle par défaut
+
+#### Settings (Paramètres)
+
+Page de paramètres avec onglets :
+
+1. **Apparence**
+   - Thème : Système (défaut), Sombre, Clair
+   - Aperçu visuel de chaque thème
+
+2. **Profil**
+   - Pseudonyme (alias public)
+   - Biographie
+   - Citation
+   - Visibilité (public/privé)
+
+3. **Sécurité**
+   - **Passkeys (WebAuthn)** : Enregistrement de clés d'authentification
+   - **2FA TOTP** : Activation avec QR code
+   - Changement de mot de passe
+   - Liste des passkeys avec suppression
+
+4. **Notifications** (placeholder)
+
+5. **Données**
+   - Export des données
+   - Suppression du compte
+
+### 11.4 Système de thème
+
+Le système de thème utilise des variables CSS et l'attribut `data-theme` sur `<html>` :
+
+```javascript
+// state.js
+const setTheme = (newTheme) => {
+    theme = newTheme || "system";
+    localStorage.setItem(themeKey, theme);
+    applyThemeToDocument(theme);
+    notify();
+};
+
+function applyThemeToDocument(currentTheme) {
+    const root = document.documentElement;
+    root.removeAttribute("data-theme");
+    if (currentTheme === "light") {
+        root.setAttribute("data-theme", "light");
+    } else if (currentTheme === "dark") {
+        root.setAttribute("data-theme", "dark");
+    }
+    // 'system' utilise prefers-color-scheme
+}
+```
+
+CSS :
+```css
+:root {
+    color-scheme: dark;
+    --dark: #0a0a0f;
+    --white: #ffffff;
+    /* ... */
+}
+
+[data-theme="light"] {
+    --dark: #ffffff;
+    --white: #1a1a2e;
+    /* ... inversé */
+}
+```
+
+### 11.5 State Management
+
+Pattern observable simple dans `state.js` :
+
+```javascript
+const state = createState();
+
+// Lecture
+state.token;
+state.theme;
+state.userPrefs;
+
+// Écriture
+state.setToken(token);
+state.setTheme("dark");
+state.setUserPrefs({ nickname: "John" });
+
+// Souscription
+const unsubscribe = state.subscribe((snapshot) => {
+    console.log(snapshot.theme);
+});
+```
+
+Propriétés gérées :
+- `token`, `refreshToken` : Authentification JWT
+- `odds`, `oddsStatus` : Cotes en temps réel
+- `betslip` : Paris en cours de sélection
+- `selectedDate` : Date sélectionnée sur le dashboard
+- `showOnboarding`, `onboardingCompleted` : État de l'onboarding
+- `theme` : Thème actif (`system`, `dark`, `light`)
+- `userPrefs` : Préférences utilisateur (nickname, bio, quote)
